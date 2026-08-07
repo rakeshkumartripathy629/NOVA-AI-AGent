@@ -109,14 +109,18 @@ async def stream_chat_response(
     citations: List[Dict[str, Any]] = []
     if knowledge_base_ids:
         retrieved = await _retrieve_context(conversation.id, knowledge_base_ids, user_message_content)
+        source_prefix = system_prompt or "You are a helpful assistant."
         if retrieved:
             context_block = "\n\n".join(
                 f"[{i + 1}] {r['content']}" for i, r in enumerate(retrieved)
             )
-            source_prefix = system_prompt or "You are a helpful assistant."
             system_prompt = (
                 f"{source_prefix}\n\n"
-                f"Use the following retrieved context to answer. Cite sources as [n].\n\n"
+                f"Answer the user's question using ONLY the retrieved context below. "
+                f"Do not add any facts, guesses or general knowledge that is not present in the context. "
+                f"If the context does not contain the answer, reply exactly: "
+                f"\"I couldn't find that in the uploaded documents.\" "
+                f"Keep the answer short and relevant to what was asked. Cite sources as [n].\n\n"
                 f"Context:\n{context_block}"
             )
             citations = [
@@ -129,6 +133,13 @@ async def stream_chat_response(
                 }
                 for i, r in enumerate(retrieved)
             ]
+        else:
+            system_prompt = (
+                f"{source_prefix}\n\n"
+                f"The user has attached documents but nothing relevant to their question was found. "
+                f"Reply exactly: \"I couldn't find that in the uploaded documents.\" "
+                f"Do not use general knowledge or make anything up."
+            )
 
     # Web search augmentation
     if use_web_search:

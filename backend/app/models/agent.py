@@ -82,12 +82,12 @@ class Agent(BaseModel):
     project: Mapped[Optional["Project"]] = relationship("Project", back_populates="agents", lazy="selectin")
     organization: Mapped["Organization"] = relationship("Organization", lazy="selectin")
     owner: Mapped["User"] = relationship("User", back_populates="agents", foreign_keys=[owner_id], lazy="selectin")
-    executions: Mapped[List["AgentExecution"]] = relationship("AgentExecution", back_populates="agent", lazy="selectin")
+    executions: Mapped[List["AgentExecution"]] = relationship("AgentExecution", back_populates="agent", lazy="select")
     template: Mapped[Optional["Agent"]] = relationship(
         "Agent", remote_side="Agent.id", back_populates="versions", foreign_keys=[template_id], lazy="selectin"
     )
     versions: Mapped[List["Agent"]] = relationship(
-        "Agent", back_populates="template", foreign_keys=[template_id], lazy="selectin"
+        "Agent", back_populates="template", foreign_keys=[template_id], lazy="select"
     )
 
     __table_args__ = (

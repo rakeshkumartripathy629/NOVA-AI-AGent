@@ -19,6 +19,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const applyAuth = useCallback((auth: api.AuthResponse) => {
     api.setToken(auth.access_token);
+    localStorage.removeItem('nova_active_conversation');
+    localStorage.removeItem('nova_chat_state');
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('nova_draft:'))
+      .forEach((k) => localStorage.removeItem(k));
     setUser(auth.user);
     setOrganization(auth.organization);
   }, []);

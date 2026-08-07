@@ -1,20 +1,23 @@
 """
 Billing and subscription management endpoints.
 """
+from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import get_current_active_user, require_permission
-from app.db.session import get_db
+from app.core.config import settings
+from app.db.session import get_db, get_session_factory
 from app.models.user import User
 from app.models.organization import Organization
 from app.models.billing import Subscription, Plan, Invoice, PaymentMethod, BillingInterval
+from app.services.billing import construct_webhook_event, handle_stripe_event
 
 
 router = APIRouter()
@@ -29,7 +32,7 @@ class PlanResponse(BaseModel):
     price: int  # in cents
     currency: str
     interval: str
-    features: dict
+    features: list
     limits: dict
     is_active: bool
     is_popular: bool
@@ -72,7 +75,7 @@ class SubscriptionResponse(BaseModel):
     trial_start: Optional[datetime]
     trial_end: Optional[datetime]
     quantity: int
-    metadata: dict
+    metadata: dict = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
     plan: Optional[PlanResponse] = None
@@ -92,8 +95,8 @@ class InvoiceResponse(BaseModel):
     invoice_number: str
     invoice_url: Optional[str]
     pdf_url: Optional[str]
-    period_start: str
-    period_end: str
+    period_start: datetime
+    period_end: datetime
     paid_at: Optional[datetime]
     created_at: datetime
     
@@ -127,7 +130,7 @@ class PaymentMethodResponse(BaseModel):
     exp_month: Optional[int]
     exp_year: Optional[int]
     is_default: bool
-    metadata: dict
+    metadata: dict = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     
     class Config:
@@ -163,6 +166,13 @@ class BillingPortalRequest(BaseModel):
 class BillingPortalResponse(BaseModel):
     """Billing portal response model."""
     url: str
+
+
+class BillingConfigResponse(BaseModel):
+    """Billing configuration exposed to clients."""
+    enabled: bool = False
+    publishable_key: Optional[str] = None
+    currency: str = "USD"
 
 
 # Endpoints
@@ -313,7 +323,7 @@ async def create_subscription(
         trial_start=now if trial_end else None,
         trial_end=trial_end,
         quantity=1,
-        metadata={},
+        metadata_={},
     )
     db.add(subscription)
     await db.commit()
@@ -606,7 +616,7 @@ async def add_payment_method(
         exp_month=12,
         exp_year=2025,
         is_default=payment_method_data.set_as_default,
-        metadata={"stripe_payment_method_id": payment_method_data.token},
+        metadata_={"stripe_payment_method_id": payment_method_data.token},
     )
     db.add(payment_method)
     await db.commit()
@@ -695,13 +705,92 @@ async def create_checkout_session(
             detail="Plan not found",
         )
     
-    # TODO: Create Stripe checkout session
-    # This is a placeholder
+    if plan.price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This plan is free; no checkout is required",
+        )
     
-    return CheckoutSessionResponse(
-        session_id="cs_test_placeholder",
-        url="https://checkout.stripe.com/pay/cs_test_placeholder",
+    if not settings.STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured on this server",
+        )
+    
+    import stripe as stripe_module
+
+    stripe_module.api_key = settings.STRIPE_SECRET_KEY
+    
+    interval_map = {"monthly": "month", "yearly": "year", "weekly": "week", "daily": "day"}
+    raw_interval = plan.interval.value if hasattr(plan.interval, "value") else plan.interval
+    interval = interval_map.get(str(raw_interval).lower(), "month")
+    
+    session = stripe_module.checkout.Session.create(
+        mode="subscription",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": (plan.currency or "USD").lower(),
+                    "unit_amount": plan.price,
+                    "product_data": {"name": plan.display_name or plan.name},
+                    "recurring": {"interval": interval},
+                },
+                "quantity": 1,
+            }
+        ],
+        customer_email=current_user.email,
+        success_url=request.success_url,
+        cancel_url=request.cancel_url,
+        metadata={
+            "organization_id": str(request.organization_id),
+            "plan_id": str(plan.id),
+        },
+        subscription_data={
+            "metadata": {
+                "organization_id": str(request.organization_id),
+                "plan_id": str(plan.id),
+            }
+        },
     )
+    
+    return CheckoutSessionResponse(session_id=session.id, url=session.url)
+
+
+@router.get("/config", response_model=BillingConfigResponse, summary="Get billing configuration")
+async def get_billing_config(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Return public billing configuration for the client."""
+    return BillingConfigResponse(
+        enabled=bool(settings.STRIPE_SECRET_KEY),
+        publishable_key=settings.STRIPE_PUBLISHABLE_KEY,
+    )
+
+
+@router.post("/webhook", summary="Stripe webhook", include_in_schema=False)
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events (public, signature-verified)."""
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Webhook secret not configured",
+        )
+    
+    try:
+        event = await construct_webhook_event(payload, signature)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid webhook signature: {exc}",
+        )
+    
+    async with get_session_factory() as db:
+        await handle_stripe_event(event, db)
+    
+    return {"received": True, "type": event.type}
 
 
 @router.post("/billing-portal", response_model=BillingPortalResponse, summary="Create billing portal session")
@@ -727,13 +816,33 @@ async def create_billing_portal_session(
             detail="Not authorized to access billing portal for this organization",
         )
     
-    # TODO: Create Stripe billing portal session
-    # This is a placeholder
+    if not settings.STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured on this server",
+        )
     
-    return BillingPortalResponse(
-        url="https://billing.stripe.com/p/login/test_placeholder",
+    # Look up the organization's Stripe customer id
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.organization_id == request.organization_id
+        )
     )
+    subscription = result.scalar_one_or_none()
+    customer_id = subscription.stripe_customer_id if subscription else None
+    
+    if not customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Stripe customer linked yet — complete a checkout first",
+        )
+    
+    import stripe as stripe_module
 
-
-# Import datetime at the end
-from datetime import datetime
+    stripe_module.api_key = settings.STRIPE_SECRET_KEY
+    session = stripe_module.billing_portal.Session.create(
+        customer=customer_id,
+        return_url=request.return_url,
+    )
+    
+    return BillingPortalResponse(url=session.url)

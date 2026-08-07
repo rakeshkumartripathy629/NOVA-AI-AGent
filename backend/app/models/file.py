@@ -107,37 +107,3 @@ class File(BaseModel):
 
     def __repr__(self) -> str:
         return f"<File(id={self.id}, filename={self.filename})>"
-    conversation: Mapped[Optional["Conversation"]] = relationship(
-        "Conversation", back_populates="files", lazy="selectin"
-    )
-    message: Mapped[Optional["Message"]] = relationship(
-        "Message", back_populates="files", lazy="selectin"
-    )
-    knowledge_base: Mapped[Optional["KnowledgeBase"]] = relationship(
-        "KnowledgeBase", back_populates="files", lazy="selectin"
-    )
-    knowledge_base_document: Mapped[Optional["KnowledgeBaseDocument"]] = relationship(
-        "KnowledgeBaseDocument",
-        back_populates="files",
-        lazy="selectin",
-    )
-    uploaded_by_user: Mapped["User"] = relationship(
-        "User",
-        back_populates="files",
-        foreign_keys=[uploaded_by],
-        lazy="selectin",
-    )
-    organization: Mapped["Organization"] = relationship(
-        "Organization",
-        lazy="selectin",
-    )
-
-    __table_args__ = (
-        Index("ix_files_org_status", "organization_id", "status"),
-        Index("ix_files_org_type", "organization_id", "file_type"),
-        Index("ix_files_conversation", "conversation_id"),
-        Index("ix_files_kb", "knowledge_base_id"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<File(id={self.id}, filename={self.filename})>"

@@ -94,52 +94,52 @@ class User(BaseModel):
 
     # Relationships
     organizations: Mapped[List["OrganizationMember"]] = relationship(
-        "OrganizationMember", back_populates="user", foreign_keys="OrganizationMember.user_id", lazy="selectin"
+        "OrganizationMember", back_populates="user", foreign_keys="OrganizationMember.user_id", lazy="select"
     )
     owned_organizations: Mapped[List["Organization"]] = relationship(
-        "Organization", back_populates="owner", foreign_keys="Organization.owner_id", lazy="selectin"
+        "Organization", back_populates="owner", foreign_keys="Organization.owner_id", lazy="select"
     )
     projects: Mapped[List["ProjectMember"]] = relationship(
-        "ProjectMember", back_populates="user", foreign_keys="ProjectMember.user_id", lazy="selectin"
+        "ProjectMember", back_populates="user", foreign_keys="ProjectMember.user_id", lazy="select"
     )
     conversations: Mapped[List["ConversationMember"]] = relationship(
-        "ConversationMember", back_populates="user", foreign_keys="ConversationMember.user_id", lazy="selectin"
+        "ConversationMember", back_populates="user", foreign_keys="ConversationMember.user_id", lazy="select"
     )
     owned_conversations: Mapped[List["Conversation"]] = relationship(
-        "Conversation", back_populates="owner", foreign_keys="Conversation.owner_id", lazy="selectin"
+        "Conversation", back_populates="owner", foreign_keys="Conversation.owner_id", lazy="select"
     )
     messages: Mapped[List["Message"]] = relationship(
-        "Message", back_populates="user", lazy="selectin"
+        "Message", back_populates="user", lazy="select"
     )
     files: Mapped[List["File"]] = relationship(
-        "File", back_populates="uploaded_by_user", foreign_keys="File.uploaded_by", lazy="selectin"
+        "File", back_populates="uploaded_by_user", foreign_keys="File.uploaded_by", lazy="select"
     )
     knowledge_bases: Mapped[List["KnowledgeBaseMember"]] = relationship(
-        "KnowledgeBaseMember", back_populates="user", foreign_keys="KnowledgeBaseMember.user_id", lazy="selectin"
+        "KnowledgeBaseMember", back_populates="user", foreign_keys="KnowledgeBaseMember.user_id", lazy="select"
     )
     owned_knowledge_bases: Mapped[List["KnowledgeBase"]] = relationship(
-        "KnowledgeBase", back_populates="owner", foreign_keys="KnowledgeBase.owner_id", lazy="selectin"
+        "KnowledgeBase", back_populates="owner", foreign_keys="KnowledgeBase.owner_id", lazy="select"
     )
     agents: Mapped[List["Agent"]] = relationship(
-        "Agent", back_populates="owner", foreign_keys="Agent.owner_id", lazy="selectin"
+        "Agent", back_populates="owner", foreign_keys="Agent.owner_id", lazy="select"
     )
     agent_executions: Mapped[List["AgentExecution"]] = relationship(
-        "AgentExecution", back_populates="user", lazy="selectin"
+        "AgentExecution", back_populates="user", lazy="select"
     )
     api_keys: Mapped[List["APIKey"]] = relationship(
-        "APIKey", back_populates="user", lazy="selectin"
+        "APIKey", back_populates="user", lazy="select"
     )
     notifications: Mapped[List["Notification"]] = relationship(
-        "Notification", back_populates="user", lazy="selectin"
+        "Notification", back_populates="user", lazy="select"
     )
     audit_logs: Mapped[List["AuditLog"]] = relationship(
-        "AuditLog", back_populates="user", lazy="selectin"
+        "AuditLog", back_populates="user", lazy="select"
     )
     sessions: Mapped[List["UserSession"]] = relationship(
-        "UserSession", back_populates="user", lazy="selectin"
+        "UserSession", back_populates="user", lazy="select"
     )
     oauth_accounts: Mapped[List["OAuthAccount"]] = relationship(
-        "OAuthAccount", back_populates="user", lazy="selectin"
+        "OAuthAccount", back_populates="user", lazy="select"
     )
 
     __table_args__ = (

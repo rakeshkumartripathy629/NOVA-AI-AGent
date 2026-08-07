@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
+from kombu import Queue
 
 from app.core.config import settings
 
@@ -42,14 +43,14 @@ celery_app.conf.update(
         "app.workers.tasks.aggregate_usage": {"queue": "analytics"},
     },
     task_queues=(
-        "default",
-        "files",
-        "emails",
-        "webhooks",
-        "notifications",
-        "agents",
-        "workflows",
-        "analytics",
+        Queue("default"),
+        Queue("files"),
+        Queue("emails"),
+        Queue("webhooks"),
+        Queue("notifications"),
+        Queue("agents"),
+        Queue("workflows"),
+        Queue("analytics"),
     ),
 )
 

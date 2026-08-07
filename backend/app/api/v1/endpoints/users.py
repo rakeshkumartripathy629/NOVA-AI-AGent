@@ -1,6 +1,7 @@
 """
 User management endpoints.
 """
+from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 
@@ -377,7 +378,3 @@ async def get_user_organizations(
         }
         for m in members
     ]
-
-
-# Import datetime at the end
-from datetime import datetime

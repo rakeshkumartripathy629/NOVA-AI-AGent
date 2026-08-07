@@ -78,6 +78,111 @@ async def construct_webhook_event(payload: bytes, signature_header: str) -> Any:
     )
 
 
+async def handle_stripe_event(event: Any, db) -> Dict[str, str]:
+    """Dispatch a verified Stripe webhook event against local rows."""
+    from sqlalchemy import select
+
+    from app.models.billing import Plan, Subscription, SubscriptionStatus
+
+    etype = event.type
+    data = event.data.object
+
+    if etype == "checkout.session.completed":
+        metadata = data.get("metadata", {}) or {}
+        org_id = metadata.get("organization_id")
+        plan_id = metadata.get("plan_id")
+        if not org_id:
+            return {"status": "skipped"}
+
+        sub = (
+            await db.execute(
+                select(Subscription).where(Subscription.organization_id == UUID(org_id))
+            )
+        ).scalar_one_or_none()
+
+        if sub is None:
+            plan = None
+            if plan_id:
+                plan = (
+                    await db.execute(select(Plan).where(Plan.id == UUID(plan_id)))
+                ).scalar_one_or_none()
+            if plan is None:
+                return {"status": "skipped"}
+            now = datetime.utcnow()
+            sub = Subscription(
+                organization_id=UUID(org_id),
+                plan_id=plan.id,
+                status=SubscriptionStatus.ACTIVE,
+                interval=plan.interval,
+                current_period_start=now,
+                current_period_end=now + timedelta(days=30),
+                stripe_subscription_id=data.get("subscription"),
+                stripe_customer_id=data.get("customer"),
+            )
+            db.add(sub)
+        else:
+            sub.status = SubscriptionStatus.ACTIVE
+            if plan_id:
+                sub.plan_id = UUID(plan_id)
+            sub.stripe_subscription_id = data.get("subscription") or sub.stripe_subscription_id
+            sub.stripe_customer_id = data.get("customer") or sub.stripe_customer_id
+
+        await db.commit()
+        await db.refresh(sub)
+        return {"status": "ok", "id": str(sub.id)}
+
+    if etype in ("customer.subscription.updated", "customer.subscription.deleted"):
+        stripe_sub = data
+        stripe_sub_id = stripe_sub.get("id")
+        org_id = (stripe_sub.get("metadata", {}) or {}).get("organization_id")
+
+        subscription = None
+        if stripe_sub_id:
+            subscription = (
+                await db.execute(
+                    select(Subscription).where(
+                        Subscription.stripe_subscription_id == stripe_sub_id
+                    )
+                )
+            ).scalar_one_or_none()
+        if subscription is None and org_id:
+            subscription = (
+                await db.execute(
+                    select(Subscription).where(
+                        Subscription.organization_id == UUID(org_id)
+                    )
+                )
+            ).scalar_one_or_none()
+        if subscription is None:
+            return {"status": "skipped"}
+
+        raw_status = stripe_sub.get("status", "active")
+        status = (
+            SubscriptionStatus(raw_status)
+            if raw_status in SubscriptionStatus._value2member_map_
+            else SubscriptionStatus.ACTIVE
+        )
+        subscription.status = status
+        subscription.stripe_subscription_id = stripe_sub_id or subscription.stripe_subscription_id
+        subscription.current_period_start = datetime.fromtimestamp(
+            stripe_sub.get("current_period_start", 0)
+        )
+        subscription.current_period_end = datetime.fromtimestamp(
+            stripe_sub.get("current_period_end", 0)
+        )
+        subscription.cancel_at_period_end = bool(stripe_sub.get("cancel_at_period_end", False))
+
+        if etype == "customer.subscription.deleted":
+            subscription.status = SubscriptionStatus.CANCELED
+            subscription.canceled_at = datetime.utcnow()
+
+        await db.commit()
+        await db.refresh(subscription)
+        return {"status": "ok", "id": str(subscription.id)}
+
+    return {"status": "ignored", "type": etype}
+
+
 async def sync_subscription_from_stripe(event: Any) -> Optional[Dict[str, Any]]:
     """Apply a Stripe subscription event to the local Subscription row."""
     from sqlalchemy import select

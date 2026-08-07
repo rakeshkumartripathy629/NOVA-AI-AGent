@@ -58,7 +58,7 @@ class Workflow(BaseModel):
 
     organization: Mapped["Organization"] = relationship("Organization", lazy="selectin")
     owner: Mapped["User"] = relationship("User", lazy="selectin")
-    executions: Mapped[List["WorkflowExecution"]] = relationship("WorkflowExecution", back_populates="workflow", lazy="selectin")
+    executions: Mapped[List["WorkflowExecution"]] = relationship("WorkflowExecution", back_populates="workflow", lazy="select")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "slug", name="uq_workflow_org_slug"),

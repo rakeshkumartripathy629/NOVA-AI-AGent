@@ -238,6 +238,22 @@ class GeminiProvider(ChatProvider):
         return vectors
 
 
+class GroqProvider(OpenAIProvider):
+    """Groq is OpenAI-compatible; chat only (no embeddings)."""
+
+    name = "groq"
+
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None) -> None:
+        super().__init__(
+            api_key=api_key or settings.GROQ_API_KEY,
+            base_url=base_url or settings.GROQ_BASE_URL,
+        )
+        self.default_model = settings.GROQ_MODEL
+
+    async def embed(self, texts, model=None):
+        raise ProviderError("Groq does not support embeddings")
+
+
 class OpenRouterProvider(OpenAIProvider):
     """OpenRouter exposes an OpenAI-compatible API."""
 
@@ -284,6 +300,7 @@ def get_provider(name: str, **kwargs: Any) -> ChatProvider:
         "gemini": GeminiProvider,
         "google": GeminiProvider,
         "openrouter": OpenRouterProvider,
+        "groq": GroqProvider,
     }
     provider_cls = providers.get(name.lower(), OpenAIProvider)
     return provider_cls(**kwargs)
@@ -291,6 +308,8 @@ def get_provider(name: str, **kwargs: Any) -> ChatProvider:
 
 def default_provider() -> ChatProvider:
     """Choose the best available provider based on configured keys."""
+    if settings.GROQ_API_KEY:
+        return GroqProvider()
     if settings.ANTHROPIC_API_KEY:
         return AnthropicProvider()
     if settings.GEMINI_API_KEY:
@@ -298,3 +317,14 @@ def default_provider() -> ChatProvider:
     if settings.OPENROUTER_API_KEY:
         return OpenRouterProvider()
     return OpenAIProvider()
+
+
+def embedding_provider() -> ChatProvider:
+    """Choose the provider used for embeddings (Groq has none)."""
+    if settings.GEMINI_API_KEY:
+        return GeminiProvider()
+    if settings.OPENAI_API_KEY:
+        return OpenAIProvider()
+    if settings.OPENROUTER_API_KEY:
+        return OpenRouterProvider()
+    return default_provider()

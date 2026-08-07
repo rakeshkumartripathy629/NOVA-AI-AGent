@@ -79,10 +79,10 @@ class Conversation(BaseModel):
     folder: Mapped[Optional["Folder"]] = relationship("Folder", back_populates="conversations", lazy="selectin")
     organization: Mapped["Organization"] = relationship("Organization", lazy="selectin")
     owner: Mapped["User"] = relationship("User", foreign_keys=[owner_id], lazy="selectin")
-    members: Mapped[List["ConversationMember"]] = relationship("ConversationMember", back_populates="conversation", lazy="selectin")
-    messages: Mapped[List["Message"]] = relationship("Message", back_populates="conversation", lazy="selectin", order_by="Message.created_at")
-    files: Mapped[List["File"]] = relationship("File", back_populates="conversation", lazy="selectin")
-    branches: Mapped[List["ConversationBranch"]] = relationship("ConversationBranch", back_populates="conversation", lazy="selectin")
+    members: Mapped[List["ConversationMember"]] = relationship("ConversationMember", back_populates="conversation", lazy="select")
+    messages: Mapped[List["Message"]] = relationship("Message", back_populates="conversation", lazy="select", order_by="Message.created_at")
+    files: Mapped[List["File"]] = relationship("File", back_populates="conversation", lazy="select")
+    branches: Mapped[List["ConversationBranch"]] = relationship("ConversationBranch", back_populates="conversation", lazy="select")
 
     __table_args__ = (
         Index("ix_conversations_org_archived", "organization_id", "status"),
@@ -147,7 +147,7 @@ class ConversationBranch(BaseModel):
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="branches", lazy="selectin")
     parent_message: Mapped["Message"] = relationship("Message", foreign_keys=[parent_message_id], lazy="selectin")
     created_by: Mapped["User"] = relationship("User", foreign_keys=[created_by_id], lazy="selectin")
-    messages: Mapped[List["Message"]] = relationship("Message", back_populates="branch", foreign_keys="Message.branch_id", lazy="selectin")
+    messages: Mapped[List["Message"]] = relationship("Message", back_populates="branch", foreign_keys="Message.branch_id", lazy="select")
 
     def __repr__(self) -> str:
         return f"<ConversationBranch(conv={self.conversation_id}, parent={self.parent_message_id})>"

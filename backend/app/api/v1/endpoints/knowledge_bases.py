@@ -404,6 +404,7 @@ async def create_document(
     kb_id: UUID,
     doc_data: DocumentCreate,
     current_user: User = Depends(get_current_active_user),
+    organization: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a document to a knowledge base."""
@@ -424,12 +425,9 @@ async def create_document(
     await db.commit()
     await db.refresh(document)
 
-    try:
-        from app.workers.tasks import process_document
+    from app.services.indexing import queue_document_processing
 
-        process_document.delay(str(document.id), str(organization.id))
-    except Exception:  # noqa: BLE001
-        pass
+    await queue_document_processing(document.id, organization.id)
 
     return DocumentResponse.model_validate(document)
 
@@ -499,12 +497,9 @@ async def update_document(
     await db.commit()
     await db.refresh(document)
 
-    try:
-        from app.workers.tasks import process_document
+    from app.services.indexing import queue_document_processing
 
-        process_document.delay(str(document.id), str(organization.id))
-    except Exception:  # noqa: BLE001
-        pass
+    await queue_document_processing(document.id, organization.id)
 
     return DocumentResponse.model_validate(document)
 

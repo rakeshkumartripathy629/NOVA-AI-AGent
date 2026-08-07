@@ -51,15 +51,15 @@ class Organization(BaseModel):
 
     owner: Mapped["User"] = relationship("User", back_populates="owned_organizations", foreign_keys=[owner_id], lazy="selectin")
     members: Mapped[List["OrganizationMember"]] = relationship(
-        "OrganizationMember", back_populates="organization", lazy="selectin"
+        "OrganizationMember", back_populates="organization", lazy="select"
     )
-    projects: Mapped[List["Project"]] = relationship("Project", back_populates="organization", lazy="selectin")
-    subscriptions: Mapped[List["Subscription"]] = relationship("Subscription", back_populates="organization", lazy="selectin")
-    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="organization", lazy="selectin")
-    payment_methods: Mapped[List["PaymentMethod"]] = relationship("PaymentMethod", back_populates="organization", lazy="selectin")
-    api_keys: Mapped[List["APIKey"]] = relationship("APIKey", back_populates="organization", lazy="selectin")
-    webhooks: Mapped[List["Webhook"]] = relationship("Webhook", back_populates="organization", lazy="selectin")
-    audit_logs: Mapped[List["AuditLog"]] = relationship("AuditLog", back_populates="organization", lazy="selectin")
+    projects: Mapped[List["Project"]] = relationship("Project", back_populates="organization", lazy="select")
+    subscriptions: Mapped[List["Subscription"]] = relationship("Subscription", back_populates="organization", lazy="select")
+    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="organization", lazy="select")
+    payment_methods: Mapped[List["PaymentMethod"]] = relationship("PaymentMethod", back_populates="organization", lazy="select")
+    api_keys: Mapped[List["APIKey"]] = relationship("APIKey", back_populates="organization", lazy="select")
+    webhooks: Mapped[List["Webhook"]] = relationship("Webhook", back_populates="organization", lazy="select")
+    audit_logs: Mapped[List["AuditLog"]] = relationship("AuditLog", back_populates="organization", lazy="select")
 
     __table_args__ = (Index("ix_organizations_owner_status", "owner_id", "status"),)
 

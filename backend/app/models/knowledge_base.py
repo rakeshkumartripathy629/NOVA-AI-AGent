@@ -58,9 +58,9 @@ class KnowledgeBase(BaseModel):
     project: Mapped[Optional["Project"]] = relationship("Project", back_populates="knowledge_bases", lazy="selectin")
     organization: Mapped["Organization"] = relationship("Organization", lazy="selectin")
     owner: Mapped["User"] = relationship("User", back_populates="owned_knowledge_bases", foreign_keys=[owner_id], lazy="selectin")
-    members: Mapped[List["KnowledgeBaseMember"]] = relationship("KnowledgeBaseMember", back_populates="knowledge_base", lazy="selectin")
-    documents: Mapped[List["KnowledgeBaseDocument"]] = relationship("KnowledgeBaseDocument", back_populates="knowledge_base", lazy="selectin")
-    files: Mapped[List["File"]] = relationship("File", back_populates="knowledge_base", lazy="selectin")
+    members: Mapped[List["KnowledgeBaseMember"]] = relationship("KnowledgeBaseMember", back_populates="knowledge_base", lazy="select")
+    documents: Mapped[List["KnowledgeBaseDocument"]] = relationship("KnowledgeBaseDocument", back_populates="knowledge_base", lazy="select")
+    files: Mapped[List["File"]] = relationship("File", back_populates="knowledge_base", lazy="select")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "slug", name="uq_kb_org_slug"),
@@ -97,7 +97,7 @@ class KnowledgeBaseDocument(BaseModel):
 
     knowledge_base: Mapped["KnowledgeBase"] = relationship("KnowledgeBase", back_populates="documents", lazy="selectin")
     uploaded_by_user: Mapped["User"] = relationship("User", foreign_keys=[uploaded_by], lazy="selectin")
-    files: Mapped[List["File"]] = relationship("File", back_populates="knowledge_base_document", lazy="selectin")
+    files: Mapped[List["File"]] = relationship("File", back_populates="knowledge_base_document", lazy="select")
 
     __table_args__ = (Index("ix_kb_docs_kb_status", "knowledge_base_id", "status"),)
 

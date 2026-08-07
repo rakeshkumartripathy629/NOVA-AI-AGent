@@ -61,11 +61,11 @@ class Project(BaseModel):
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="projects", lazy="selectin")
     owner: Mapped["User"] = relationship("User", foreign_keys=[owner_id], lazy="selectin")
-    members: Mapped[List["ProjectMember"]] = relationship("ProjectMember", back_populates="project", lazy="selectin")
-    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="project", lazy="selectin")
-    folders: Mapped[List["Folder"]] = relationship("Folder", back_populates="project", lazy="selectin")
-    knowledge_bases: Mapped[List["KnowledgeBase"]] = relationship("KnowledgeBase", back_populates="project", lazy="selectin")
-    agents: Mapped[List["Agent"]] = relationship("Agent", back_populates="project", lazy="selectin")
+    members: Mapped[List["ProjectMember"]] = relationship("ProjectMember", back_populates="project", lazy="select")
+    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="project", lazy="select")
+    folders: Mapped[List["Folder"]] = relationship("Folder", back_populates="project", lazy="select")
+    knowledge_bases: Mapped[List["KnowledgeBase"]] = relationship("KnowledgeBase", back_populates="project", lazy="select")
+    agents: Mapped[List["Agent"]] = relationship("Agent", back_populates="project", lazy="select")
 
     __table_args__ = (
         UniqueConstraint("organization_id", "slug", name="uq_project_org_slug"),
@@ -132,8 +132,8 @@ class Folder(BaseModel):
     project: Mapped["Project"] = relationship("Project", back_populates="folders", lazy="selectin")
     owner: Mapped["User"] = relationship("User", foreign_keys=[owner_id], lazy="selectin")
     parent: Mapped[Optional["Folder"]] = relationship("Folder", remote_side="Folder.id", back_populates="children", lazy="selectin")
-    children: Mapped[List["Folder"]] = relationship("Folder", back_populates="parent", lazy="selectin")
-    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="folder", lazy="selectin")
+    children: Mapped[List["Folder"]] = relationship("Folder", back_populates="parent", lazy="select")
+    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="folder", lazy="select")
 
     __table_args__ = (Index("ix_folders_project_parent", "project_id", "parent_id"),)
 

@@ -97,8 +97,8 @@ class Message(BaseModel):
     branch: Mapped[Optional["ConversationBranch"]] = relationship("ConversationBranch", back_populates="messages", foreign_keys=[branch_id], lazy="selectin")
     user: Mapped[Optional["User"]] = relationship("User", back_populates="messages", lazy="selectin")
     parent: Mapped[Optional["Message"]] = relationship("Message", remote_side="Message.id", back_populates="children", lazy="selectin")
-    children: Mapped[List["Message"]] = relationship("Message", back_populates="parent", lazy="selectin")
-    files: Mapped[List["File"]] = relationship("File", back_populates="message", lazy="selectin")
+    children: Mapped[List["Message"]] = relationship("Message", back_populates="parent", lazy="select")
+    files: Mapped[List["File"]] = relationship("File", back_populates="message", lazy="select")
 
     __table_args__ = (
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),

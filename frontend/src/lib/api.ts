@@ -132,13 +132,50 @@ export async function listMessages(
   );
 }
 
+export async function updateMessage(
+  conversationId: string,
+  messageId: string,
+  content: string,
+): Promise<Message> {
+  return request<Message>(`/messages/conversations/${conversationId}/messages/${messageId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function deleteMessage(conversationId: string, messageId: string): Promise<void> {
+  return request<void>(`/messages/conversations/${conversationId}/messages/${messageId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function renameConversation(id: string, title: string): Promise<Conversation> {
+  return request<Conversation>(`/conversations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  return request<void>(`/conversations/${id}`, { method: 'DELETE' });
+}
+
 export async function streamChat(
   conversationId: string,
   content: string,
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
+  knowledgeBaseIds?: string[],
+  useWebSearch = false,
 ): Promise<void> {
   const token = getToken();
+  const body: Record<string, unknown> = { content, stream: true };
+  if (knowledgeBaseIds && knowledgeBaseIds.length > 0) {
+    body.knowledge_base_ids = knowledgeBaseIds;
+  }
+  if (useWebSearch) {
+    body.use_web_search = true;
+  }
   const resp = await fetch(`${API_BASE}/messages/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     headers: {
@@ -146,7 +183,7 @@ export async function streamChat(
       Accept: 'text/event-stream',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ content, stream: true }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!resp.ok || !resp.body) {
@@ -175,6 +212,110 @@ export async function streamChat(
       }
     }
   }
+}
+
+// ---- Knowledge bases & files ----
+
+export async function listKnowledgeBases(): Promise<KnowledgeBaseListResponse> {
+  return request<KnowledgeBaseListResponse>('/knowledge-bases');
+}
+
+export async function createKnowledgeBase(
+  name: string,
+  description?: string,
+): Promise<KnowledgeBase> {
+  return request<KnowledgeBase>('/knowledge-bases', {
+    method: 'POST',
+    body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function uploadFile(
+  knowledgeBaseId: string,
+  file: File,
+): Promise<FileRecord> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('knowledge_base_id', knowledgeBaseId);
+  const token = getToken();
+  const resp = await fetch(`${API_BASE}/files/upload`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!resp.ok) {
+    let message = `Upload failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      message = body.detail ?? message;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(resp.status, message);
+  }
+  return (await resp.json()) as FileRecord;
+}
+
+export async function getFile(fileId: string): Promise<FileRecord> {
+  return request<FileRecord>(`/files/${fileId}`);
+}
+
+export async function openFile(fileId: string): Promise<void> {
+  const token = getToken();
+  const resp = await fetch(`${API_BASE}/files/${fileId}/download-content`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `Download failed (${resp.status})`);
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.target = '_blank';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ---- Billing & usage ----
+
+export async function listPlans(): Promise<{ plans: Plan[] }> {
+  return request<{ plans: Plan[] }>('/billing/plans');
+}
+
+export async function getSubscription(organizationId: string): Promise<Subscription> {
+  return request<Subscription>(`/billing/organizations/${organizationId}/subscription`);
+}
+
+export async function getUsage(): Promise<{ period: string; items: UsageItem[] }> {
+  return request<{ period: string; items: UsageItem[] }>('/subscriptions/usage');
+}
+
+export async function createCheckoutSession(
+  organizationId: string,
+  planId: string,
+): Promise<{ session_id: string; url: string }> {
+  return request<{ session_id: string; url: string }>('/billing/checkout', {
+    method: 'POST',
+    body: JSON.stringify({
+      organization_id: organizationId,
+      plan_id: planId,
+      success_url: `${window.location.origin}?payment=success`,
+      cancel_url: `${window.location.origin}?payment=cancelled`,
+    }),
+  });
+}
+
+export async function getBillingConfig(): Promise<{
+  enabled: boolean;
+  publishable_key?: string | null;
+  currency?: string;
+}> {
+  return request<{ enabled: boolean; publishable_key?: string | null; currency?: string }>(
+    '/billing/config',
+  );
 }
 
 // ---- Types ----
@@ -235,7 +376,16 @@ export interface Message {
   status: string;
   content: string | null;
   created_at: string;
-  citations?: unknown[];
+  is_edited?: boolean;
+  citations?: Citation[];
+}
+
+export interface Citation {
+  index: number;
+  type?: string;
+  title?: string;
+  url?: string;
+  content?: string;
 }
 
 export interface MessageListResponse {
@@ -251,3 +401,62 @@ export type ChatEvent =
   | { type: 'citations'; citations: unknown[] }
   | { type: 'done'; message_id: string }
   | { type: 'error'; message: string };
+
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  is_indexed: boolean;
+  document_count: number;
+  total_chunks: number;
+}
+
+export interface KnowledgeBaseListResponse {
+  knowledge_bases: KnowledgeBase[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface FileRecord {
+  id: string;
+  original_filename: string;
+  filename: string;
+  file_type: string;
+  mime_type: string;
+  file_size: number;
+  status: string;
+  knowledge_base_id?: string | null;
+  created_at: string;
+}
+
+export interface Plan {
+  id: string;
+  name: string;
+  display_name?: string;
+  description?: string | null;
+  price: number;
+  currency: string;
+  interval: string;
+  features?: string[];
+  limits?: Record<string, unknown>;
+  is_popular?: boolean;
+}
+
+export interface Subscription {
+  id: string;
+  organization_id: string;
+  plan_id: string;
+  status: string;
+  interval: string;
+  current_period_start?: string;
+  current_period_end?: string;
+}
+
+export interface UsageItem {
+  type: string;
+  total_quantity: number;
+  total_cost: number;
+}

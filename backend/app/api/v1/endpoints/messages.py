@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.security import get_current_active_user
-from app.db.session import get_db
+from app.db.session import get_db, get_db_context
 from app.models.conversation import Conversation, ConversationMember
 from app.models.message import Message, MessageRole, MessageStatus, MessageType
 from app.models.user import User
@@ -399,7 +399,7 @@ async def stream_message(
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
         # Finalize the assistant message
-        async with get_db() as final_db:
+        async with get_db_context() as final_db:
             result = await final_db.execute(
                 select(Message).where(Message.id == assistant_message.id)
             )

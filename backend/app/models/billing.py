@@ -56,7 +56,7 @@ class Plan(BaseModel):
     stripe_price_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
     stripe_product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-    subscriptions: Mapped[List["Subscription"]] = relationship("Subscription", back_populates="plan", lazy="selectin")
+    subscriptions: Mapped[List["Subscription"]] = relationship("Subscription", back_populates="plan", lazy="select")
 
     __table_args__ = (Index("ix_plans_active_interval", "is_active", "interval"),)
 
@@ -92,7 +92,7 @@ class Subscription(BaseModel):
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="subscriptions", lazy="selectin")
     plan: Mapped["Plan"] = relationship("Plan", back_populates="subscriptions", lazy="selectin")
-    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="subscription", lazy="selectin")
+    invoices: Mapped[List["Invoice"]] = relationship("Invoice", back_populates="subscription", lazy="select")
 
     __table_args__ = (
         Index("ix_subscriptions_org_status", "organization_id", "status"),

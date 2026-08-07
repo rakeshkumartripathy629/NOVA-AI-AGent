@@ -130,6 +130,7 @@ async def list_conversations(
     
     query = select(Conversation).where(
         Conversation.id.in_(conversation_ids),
+        Conversation.is_deleted.is_(False),
     )
     
     if project_id:
@@ -234,7 +235,10 @@ async def get_conversation(
         )
     
     result = await db.execute(
-        select(Conversation).where(Conversation.id == conversation_id)
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.is_deleted.is_(False),
+        )
     )
     conversation = result.scalar_one_or_none()
     

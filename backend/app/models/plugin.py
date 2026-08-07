@@ -67,7 +67,7 @@ class Plugin(BaseModel):
     )
 
     publisher: Mapped["User"] = relationship("User", lazy="selectin")
-    installations: Mapped[List["PluginInstallation"]] = relationship("PluginInstallation", back_populates="plugin", lazy="selectin")
+    installations: Mapped[List["PluginInstallation"]] = relationship("PluginInstallation", back_populates="plugin", lazy="select")
 
     __table_args__ = (Index("ix_plugins_category_status", "category", "status"),)
 

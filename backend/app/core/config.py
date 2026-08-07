@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     QDRANT_URL: str = "http://localhost:6333"
     QDRANT_API_KEY: Optional[str] = None
     QDRANT_COLLECTION_PREFIX: str = "nova_ai"
+    # Fall back to a Postgres-backed vector store when Qdrant is unreachable
+    QDRANT_AUTO_FALLBACK: bool = True
     
     # Storage (S3/MinIO)
     STORAGE_ENDPOINT: str = "http://localhost:9000"
@@ -84,6 +86,9 @@ class Settings(BaseSettings):
     STORAGE_REGION: str = "us-east-1"
     STORAGE_SECURE: bool = False
     STORAGE_PUBLIC_URL: Optional[str] = None
+    # Fall back to local disk when MinIO/S3 is unreachable
+    STORAGE_AUTO_FALLBACK: bool = True
+    STORAGE_LOCAL_DIR: str = "storage_local"
     
     # AI Providers
     OPENAI_API_KEY: Optional[str] = None
@@ -100,6 +105,10 @@ class Settings(BaseSettings):
     
     OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
     
     # Embedding Models
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -110,7 +119,7 @@ class Settings(BaseSettings):
     RAG_CHUNK_SIZE: int = 1000
     RAG_CHUNK_OVERLAP: int = 200
     RAG_TOP_K: int = 5
-    RAG_SIMILARITY_THRESHOLD: float = 0.7
+    RAG_SIMILARITY_THRESHOLD: float = 0.45
     RAG_RERANK_TOP_K: int = 10
     RAG_RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     
@@ -223,6 +232,7 @@ class Settings(BaseSettings):
     
     # Stripe
     STRIPE_SECRET_KEY: Optional[str] = None
+    STRIPE_PUBLISHABLE_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None
     STRIPE_BILLING_PORTAL_URL: Optional[str] = None
     

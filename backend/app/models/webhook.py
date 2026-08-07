@@ -57,7 +57,7 @@ class Webhook(BaseModel):
     headers: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="webhooks", lazy="selectin")
-    deliveries: Mapped[List["WebhookDelivery"]] = relationship("WebhookDelivery", back_populates="webhook", lazy="selectin")
+    deliveries: Mapped[List["WebhookDelivery"]] = relationship("WebhookDelivery", back_populates="webhook", lazy="select")
 
     __table_args__ = (Index("ix_webhooks_org_active", "organization_id", "is_active"),)
 

@@ -131,8 +131,10 @@ async def create_api_key(
     await db.commit()
     await db.refresh(api_key)
 
-    response = APIKeyCreatedResponse.model_validate(api_key)
-    response.key = raw_key
+    response = APIKeyCreatedResponse(
+        **APIKeyResponse.model_validate(api_key).model_dump(),
+        key=raw_key,
+    )
     return response
 
 

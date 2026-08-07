@@ -79,6 +79,7 @@ class PresignedUrlRequest(BaseModel):
     mime_type: str
     size: int = Field(..., ge=1)
     conversation_id: Optional[UUID] = None
+    knowledge_base_id: Optional[UUID] = None
 
 
 class PresignedUrlResponse(BaseModel):
@@ -291,6 +292,7 @@ async def get_presigned_url(
         file_size=request.size,
         status=FileStatus.UPLOADING,
         conversation_id=request.conversation_id,
+        knowledge_base_id=request.knowledge_base_id,
         uploaded_by=current_user.id,
         organization_id=organization.id,
         storage_path="",
@@ -322,6 +324,7 @@ async def get_presigned_url(
 async def upload_file(
     file: UploadFile = File(...),
     conversation_id: Optional[UUID] = Form(None),
+    knowledge_base_id: Optional[UUID] = Form(None),
     current_user: User = Depends(get_current_active_user),
     organization: Organization = Depends(get_current_organization),
     db: AsyncSession = Depends(get_db),
@@ -345,6 +348,7 @@ async def upload_file(
         file_size=len(content),
         status=FileStatus.PROCESSING,
         conversation_id=conversation_id,
+        knowledge_base_id=knowledge_base_id,
         uploaded_by=current_user.id,
         organization_id=organization.id,
         storage_path="",
@@ -369,9 +373,17 @@ async def upload_file(
         await db.commit()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed") from exc
 
-    file_record.status = FileStatus.READY
     await db.commit()
-    await db.refresh(file_record)
+
+    if knowledge_base_id:
+        from app.services.indexing import queue_file_processing
+
+        await queue_file_processing(file_record.id, organization.id)
+        await db.refresh(file_record)
+    else:
+        file_record.status = FileStatus.READY
+        await db.commit()
+        await db.refresh(file_record)
 
     return _to_file_response(file_record)
 
@@ -393,10 +405,17 @@ async def complete_upload(
 
     metadata = await storage_service.get_file_metadata(file_record.storage_path)
     file_record.file_size = metadata.get("size", file_record.file_size)
-    file_record.status = FileStatus.READY
-
     await db.commit()
-    await db.refresh(file_record)
+
+    if file_record.knowledge_base_id:
+        from app.services.indexing import queue_file_processing
+
+        await queue_file_processing(file_record.id, file_record.organization_id)
+        await db.refresh(file_record)
+    else:
+        file_record.status = FileStatus.READY
+        await db.commit()
+        await db.refresh(file_record)
     return _to_file_response(file_record)
 
 
@@ -420,12 +439,41 @@ async def download_file(
     """Get presigned download URL for file."""
     file_record = await _get_accessible_file(db, file_id, current_user)
 
-    download_url = await storage_service.generate_presigned_download_url(
-        file_record.storage_path,
-        file_record.original_filename,
-        expires_in=3600,
-    )
+    try:
+        download_url = await storage_service.generate_presigned_download_url(
+            file_record.storage_path,
+            file_record.original_filename,
+            expires_in=3600,
+        )
+    except Exception:
+        download_url = f"{settings.API_V1_PREFIX}/files/{file_id}/download-content"
     return {"download_url": download_url, "expires_in": 3600}
+
+
+@router.get("/{file_id}/download-content", summary="Download file bytes")
+async def download_file_content(
+    file_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream raw file bytes (used when presigned URLs are unavailable)."""
+    from fastapi.responses import Response
+
+    file_record = await _get_accessible_file(db, file_id, current_user)
+    if file_record.status not in (FileStatus.READY, FileStatus.PROCESSING):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is not ready")
+
+    try:
+        content = await storage_service.download_file(file_record.storage_path)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Download failed") from exc
+
+    filename = file_record.original_filename.replace('"', "_")
+    return Response(
+        content=content,
+        media_type=file_record.mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.patch("/{file_id}", response_model=FileResponse, summary="Update file metadata")

@@ -267,6 +267,98 @@ export async function deleteAgent(id: string): Promise<void> {
   await request<unknown>(`/agents/${id}`, { method: 'DELETE' });
 }
 
+// ---- Projects ----
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  organization_id: string;
+  owner_id: string;
+  settings: Record<string, unknown>;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const resp = await request<{ projects: Project[] }>('/projects');
+  return resp.projects ?? [];
+}
+
+export async function createProject(
+  name: string,
+  description?: string,
+  organizationId?: string,
+): Promise<Project> {
+  return request<Project>('/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name, description, organization_id: organizationId }),
+  });
+}
+
+export async function updateProject(
+  id: string,
+  input: { name?: string; description?: string; is_archived?: boolean },
+): Promise<Project> {
+  return request<Project>(`/projects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await request<unknown>(`/projects/${id}`, { method: 'DELETE' });
+}
+
+// ---- Global search ----
+
+export interface SearchHit {
+  type: string;
+  id: string;
+  title: string;
+  snippet?: string;
+  url?: string;
+  score: number;
+}
+
+export async function searchWorkspace(
+  query: string,
+  scope?: string[],
+  limit = 25,
+): Promise<SearchHit[]> {
+  const resp = await request<{ results: SearchHit[] }>('/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, scope, limit }),
+  });
+  return resp.results ?? [];
+}
+
+// ---- Voice ----
+
+export async function transcribeVoice(file: File): Promise<string> {
+  const form = new FormData();
+  form.append('file', file);
+  const token = getToken();
+  const resp = await fetch(`${API_BASE}/voice/transcribe`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!resp.ok) {
+    let message = `Transcription failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      message = body.detail ?? message;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(resp.status, message);
+  }
+  const data = (await resp.json()) as { text: string };
+  return data.text ?? '';
+}
+
 // ---- Knowledge bases & files ----
 
 export async function listKnowledgeBases(): Promise<KnowledgeBaseListResponse> {

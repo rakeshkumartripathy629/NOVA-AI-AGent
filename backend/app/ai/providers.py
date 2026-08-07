@@ -253,6 +253,19 @@ class GroqProvider(OpenAIProvider):
     async def embed(self, texts, model=None):
         raise ProviderError("Groq does not support embeddings")
 
+    async def transcribe(self, audio_bytes, **kwargs):
+        if not self.api_key:
+            raise ProviderError("GROQ_API_KEY is not configured")
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        model = kwargs.get("model") or "whisper-large-v3"
+        transcript = await client.audio.transcriptions.create(
+            model=model,
+            file=("audio.webm", audio_bytes),
+        )
+        return transcript.text
+
 
 class OpenRouterProvider(OpenAIProvider):
     """OpenRouter exposes an OpenAI-compatible API."""

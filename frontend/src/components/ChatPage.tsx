@@ -1,20 +1,24 @@
-import { type FormEvent, useEffect, useRef, useState } from 'react';
-import * as api from '../lib/api';
-import { useAuth } from '../context/AuthContext';
-import Sidebar from './Sidebar';
-import BillingModal from './BillingModal';
-import AgentsPanel from './AgentsPanel';
-import KBManagerModal from './KBManagerModal';
-import Markdown from '../lib/Markdown';
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import * as api from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import Sidebar from "./Sidebar";
+import BillingModal from "./BillingModal";
+import AgentsPanel from "./AgentsPanel";
+import KBManagerModal from "./KBManagerModal";
+import SearchModal from "./SearchModal";
+import ProjectsModal from "./ProjectsModal";
+import Markdown from "../lib/Markdown";
 import {
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
   GlobeIcon,
+  MicIcon,
   PaperclipIcon,
+  SearchIcon,
   SendIcon,
-} from '../lib/icons';
+} from "../lib/icons";
 
 interface ChatMessage {
   id: string;
@@ -23,7 +27,12 @@ interface ChatMessage {
   streaming?: boolean;
   is_edited?: boolean;
   citations?: api.Citation[];
-  attachment?: { id: string; name: string; mime_type?: string; status?: string };
+  attachment?: {
+    id: string;
+    name: string;
+    mime_type?: string;
+    status?: string;
+  };
 }
 
 function copyToClipboard(text: string): Promise<void> {
@@ -31,14 +40,14 @@ function copyToClipboard(text: string): Promise<void> {
     return navigator.clipboard.writeText(text);
   }
   return new Promise((resolve, reject) => {
-    const ta = document.createElement('textarea');
+    const ta = document.createElement("textarea");
     ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
     document.body.appendChild(ta);
     ta.select();
     try {
-      document.execCommand('copy');
+      document.execCommand("copy");
       resolve();
     } catch (e) {
       reject(e);
@@ -53,30 +62,36 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<api.Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<api.KnowledgeBase[]>([]);
-  const [selectedKb, setSelectedKb] = useState<string>('');
+  const [selectedKb, setSelectedKb] = useState<string>("");
   const [kbMenuOpen, setKbMenuOpen] = useState(false);
   const [webSearch, setWebSearch] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
-  const [toast, setToast] = useState('');
+  const [editText, setEditText] = useState("");
+  const [toast, setToast] = useState("");
   const [showBilling, setShowBilling] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showKbManager, setShowKbManager] = useState(false);
   const [agents, setAgents] = useState<api.Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string>('');
+  const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [agentsMenuOpen, setAgentsMenuOpen] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaChunksRef = useRef<Blob[]>([]);
   const [showDownArrow, setShowDownArrow] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const ACTIVE_KEY = 'nova_active_conversation';
-  const CHAT_STATE_KEY = 'nova_chat_state';
-  const DRAFT_PREFIX = 'nova_draft:';
+  const ACTIVE_KEY = "nova_active_conversation";
+  const CHAT_STATE_KEY = "nova_chat_state";
+  const DRAFT_PREFIX = "nova_draft:";
 
   useEffect(() => {
     api.listConversations().then((res) => {
@@ -95,9 +110,12 @@ export default function ChatPage() {
     const savedState = localStorage.getItem(CHAT_STATE_KEY);
     if (savedState) {
       try {
-        const s = JSON.parse(savedState) as { selectedKb?: string; webSearch?: boolean };
+        const s = JSON.parse(savedState) as {
+          selectedKb?: string;
+          webSearch?: boolean;
+        };
         if (s.selectedKb) setSelectedKb(s.selectedKb);
-        if (typeof s.webSearch === 'boolean') setWebSearch(s.webSearch);
+        if (typeof s.webSearch === "boolean") setWebSearch(s.webSearch);
       } catch {
         /* ignore malformed state */
       }
@@ -157,9 +175,11 @@ export default function ChatPage() {
           res.messages.map((m) => ({
             id: m.id,
             role: m.role,
-            content: m.content ?? '',
+            content: m.content ?? "",
             is_edited: m.is_edited,
-            citations: Array.isArray(m.citations) ? (m.citations as api.Citation[]) : undefined,
+            citations: Array.isArray(m.citations)
+              ? (m.citations as api.Citation[])
+              : undefined,
           })),
         );
       })
@@ -172,32 +192,32 @@ export default function ChatPage() {
     const onScroll = () => {
       setShowDownArrow(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
     };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el && !showDownArrow) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [messages, showDownArrow]);
 
   const showToast = (text: string) => {
     setToast(text);
-    setTimeout(() => setToast(''), 1600);
+    setTimeout(() => setToast(""), 1600);
   };
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
     if (el) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
       setShowDownArrow(false);
     }
   };
 
   const handleNew = async () => {
-    const conv = await api.createConversation('New conversation');
+    const conv = await api.createConversation("New conversation");
     setConversations((prev) => [conv, ...prev]);
     setActiveId(conv.id);
   };
@@ -209,11 +229,15 @@ export default function ChatPage() {
     ws?: boolean,
     agentId?: string,
   ) => {
-    const userMsg: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content };
+    const userMsg: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: "user",
+      content,
+    };
     const assistantMsg: ChatMessage = {
       id: `local-${Date.now() + 1}`,
-      role: 'assistant',
-      content: '',
+      role: "assistant",
+      content: "",
       streaming: true,
     };
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -227,16 +251,19 @@ export default function ChatPage() {
         conversationId,
         content,
         (event) => {
-          if (event.type === 'content') {
+          if (event.type === "content") {
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
               if (last && last.streaming) {
-                next[next.length - 1] = { ...last, content: last.content + event.content };
+                next[next.length - 1] = {
+                  ...last,
+                  content: last.content + event.content,
+                };
               }
               return next;
             });
-          } else if (event.type === 'citations') {
+          } else if (event.type === "citations") {
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -248,7 +275,7 @@ export default function ChatPage() {
               }
               return next;
             });
-          } else if (event.type === 'error') {
+          } else if (event.type === "error") {
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -256,21 +283,27 @@ export default function ChatPage() {
                 next[next.length - 1] = {
                   ...last,
                   streaming: false,
-                  content: last.content || '⚠ ' + event.message,
+                  content: last.content || "⚠ " + event.message,
                 };
               }
               return next;
             });
-          } else if (event.type === 'done') {
+          } else if (event.type === "done") {
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
               if (last && last.streaming) {
-                next[next.length - 1] = { ...last, streaming: false, id: event.message_id };
+                next[next.length - 1] = {
+                  ...last,
+                  streaming: false,
+                  id: event.message_id,
+                };
               }
               return next;
             });
-            api.listConversations().then((res) => setConversations(res.conversations));
+            api
+              .listConversations()
+              .then((res) => setConversations(res.conversations));
           }
         },
         controller.signal,
@@ -286,7 +319,9 @@ export default function ChatPage() {
           next[next.length - 1] = {
             ...last,
             streaming: false,
-            content: last.content || '⚠ ' + (err instanceof Error ? err.message : 'Stream failed'),
+            content:
+              last.content ||
+              "⚠ " + (err instanceof Error ? err.message : "Stream failed"),
           };
         }
         return next;
@@ -301,8 +336,14 @@ export default function ChatPage() {
     e.preventDefault();
     const content = input.trim();
     if (!content || busy || !activeId) return;
-    setInput('');
-    await runStream(content, activeId, knowledgeBaseIds, webSearch, selectedAgent || undefined);
+    setInput("");
+    await runStream(
+      content,
+      activeId,
+      knowledgeBaseIds,
+      webSearch,
+      selectedAgent || undefined,
+    );
   };
 
   const handleStop = () => abortRef.current?.abort();
@@ -314,7 +355,7 @@ export default function ChatPage() {
 
   const cancelEdit = () => {
     setEditId(null);
-    setEditText('');
+    setEditText("");
   };
 
   const saveEdit = async () => {
@@ -322,40 +363,54 @@ export default function ChatPage() {
     const target = messages.find((x) => x.id === editId);
     if (!activeId || !target || !text) return;
     setEditId(null);
-    setEditText('');
-    if (target.id.startsWith('local-')) return;
+    setEditText("");
+    if (target.id.startsWith("local-")) return;
 
     const idx = messages.findIndex((x) => x.id === target.id);
-    const toDelete = messages.slice(idx).filter((x) => !x.id.startsWith('local-'));
+    const toDelete = messages
+      .slice(idx)
+      .filter((x) => !x.id.startsWith("local-"));
     await Promise.all(
-      toDelete.map((x) => api.deleteMessage(activeId, x.id).catch(() => undefined)),
+      toDelete.map((x) =>
+        api.deleteMessage(activeId, x.id).catch(() => undefined),
+      ),
     );
     setMessages((prev) => prev.slice(0, idx));
-    await runStream(text, activeId, knowledgeBaseIds, webSearch, selectedAgent || undefined);
+    await runStream(
+      text,
+      activeId,
+      knowledgeBaseIds,
+      webSearch,
+      selectedAgent || undefined,
+    );
   };
 
   const copyMessage = async (m: ChatMessage) => {
     try {
       await copyToClipboard(m.content);
-      showToast('Copied to clipboard');
+      showToast("Copied to clipboard");
     } catch {
-      showToast('Copy failed');
+      showToast("Copy failed");
     }
   };
 
   const removeMessage = async (m: ChatMessage) => {
-    if (!activeId || m.id.startsWith('local-') || busy) return;
+    if (!activeId || m.id.startsWith("local-") || busy) return;
     const idx = messages.findIndex((x) => x.id === m.id);
-    const toDelete = messages.slice(idx).filter((x) => !x.id.startsWith('local-'));
+    const toDelete = messages
+      .slice(idx)
+      .filter((x) => !x.id.startsWith("local-"));
     await Promise.all(
-      toDelete.map((x) => api.deleteMessage(activeId, x.id).catch(() => undefined)),
+      toDelete.map((x) =>
+        api.deleteMessage(activeId, x.id).catch(() => undefined),
+      ),
     );
     setMessages((prev) => prev.slice(0, idx));
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = '';
+    e.target.value = "";
     if (!file) return;
     setUploading(true);
     try {
@@ -366,15 +421,20 @@ export default function ChatPage() {
           kbId = existing.id;
           setSelectedKb(kbId);
         } else {
-          const kb = await api.createKnowledgeBase('My Documents', 'Uploaded documents');
+          const kb = await api.createKnowledgeBase(
+            "My Documents",
+            "Uploaded documents",
+          );
           kbId = kb.id;
           setSelectedKb(kbId);
-          api.listKnowledgeBases().then((res) => setKnowledgeBases(res.knowledge_bases));
+          api
+            .listKnowledgeBases()
+            .then((res) => setKnowledgeBases(res.knowledge_bases));
         }
       }
       const record = await api.uploadFile(kbId, file);
-      let status = record.status ?? '';
-      for (let i = 0; i < 20 && status !== 'ready'; i++) {
+      let status = record.status ?? "";
+      for (let i = 0; i < 20 && status !== "ready"; i++) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
           const fresh = await api.getFile(record.id);
@@ -383,19 +443,24 @@ export default function ChatPage() {
           break;
         }
       }
-      const att = { id: record.id, name: record.original_filename, mime_type: record.mime_type, status };
+      const att = {
+        id: record.id,
+        name: record.original_filename,
+        mime_type: record.mime_type,
+        status,
+      };
       setMessages((prev) => [
         ...prev,
         {
           id: `local-${Date.now()}`,
-          role: 'assistant',
+          role: "assistant",
           content: `PDF "${record.original_filename}" uploaded and indexed. What details would you like me to extract from it?`,
           attachment: att,
         },
       ]);
-      showToast('PDF uploaded');
+      showToast("PDF uploaded");
     } catch (err) {
-      showToast('⚠ ' + (err instanceof Error ? err.message : 'Upload failed'));
+      showToast("⚠ " + (err instanceof Error ? err.message : "Upload failed"));
     } finally {
       setUploading(false);
     }
@@ -405,11 +470,15 @@ export default function ChatPage() {
     fileInputRef.current?.click();
   };
 
-  const openAttachment = async (att: NonNullable<ChatMessage['attachment']>) => {
+  const openAttachment = async (
+    att: NonNullable<ChatMessage["attachment"]>,
+  ) => {
     try {
       await api.openFile(att.id);
     } catch (err) {
-      showToast('⚠ ' + (err instanceof Error ? err.message : 'Failed to open file'));
+      showToast(
+        "⚠ " + (err instanceof Error ? err.message : "Failed to open file"),
+      );
     }
   };
 
@@ -417,10 +486,12 @@ export default function ChatPage() {
     try {
       const updated = await api.renameConversation(id, title);
       setConversations((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, title: updated.title ?? title } : c)),
+        prev.map((c) =>
+          c.id === id ? { ...c, title: updated.title ?? title } : c,
+        ),
       );
     } catch (err) {
-      showToast('⚠ ' + (err instanceof Error ? err.message : 'Rename failed'));
+      showToast("⚠ " + (err instanceof Error ? err.message : "Rename failed"));
     }
   };
 
@@ -431,15 +502,90 @@ export default function ChatPage() {
       if (activeId === id) {
         setActiveId(null);
       }
-      showToast('Conversation deleted');
+      showToast("Conversation deleted");
     } catch (err) {
-      showToast('⚠ ' + (err instanceof Error ? err.message : 'Delete failed'));
+      showToast("⚠ " + (err instanceof Error ? err.message : "Delete failed"));
     }
   };
 
+  const toggleRecording = async () => {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      mediaChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) mediaChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(mediaChunksRef.current, { type: "audio/webm" });
+        if (blob.size === 0) return;
+        setTranscribing(true);
+        try {
+          const text = await api.transcribeVoice(
+            new File([blob], "recording.webm", { type: "audio/webm" }),
+          );
+          if (text) {
+            setInput((prev) => (prev ? prev + " " + text : text));
+            showToast("Voice transcribed");
+          } else {
+            showToast("No speech detected");
+          }
+        } catch (err) {
+          showToast(
+            "⚠ " +
+              (err instanceof Error ? err.message : "Transcription failed"),
+          );
+        } finally {
+          setTranscribing(false);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      showToast("⚠ Microphone unavailable");
+    }
+  };
+
+  const exportConversation = () => {
+    if (messages.length === 0) return;
+    const title = activeId
+      ? (conversations.find((c) => c.id === activeId)?.title ?? "conversation")
+      : "conversation";
+    const lines: string[] = [`# ${title}`, ""];
+    for (const m of messages) {
+      const role = m.role === "user" ? "**You**" : "**Nova**";
+      const body = m.content.replace(/\n+$/g, "");
+      lines.push(`${role}:`, "", body, "");
+    }
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[^\w\d-]+/g, "_").slice(0, 60)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("Conversation exported");
+  };
+
   const knowledgeBaseIds = selectedKb ? [selectedKb] : undefined;
-  const selectedKbName = knowledgeBases.find((k) => k.id === selectedKb)?.name ?? '';
-  const selectedAgentName = agents.find((a) => a.id === selectedAgent)?.name ?? '';
+  const selectedKbName =
+    knowledgeBases.find((k) => k.id === selectedKb)?.name ?? "";
+  const selectedAgentName =
+    agents.find((a) => a.id === selectedAgent)?.name ?? "";
 
   return (
     <div className="app-shell">
@@ -455,15 +601,46 @@ export default function ChatPage() {
       <main className="chat-main">
         <header className="chat-header">
           <div className="chat-header-title">
-            {activeId ? conversations.find((c) => c.id === activeId)?.title ?? 'Conversation' : 'Nova AI'}
+            {activeId
+              ? (conversations.find((c) => c.id === activeId)?.title ??
+                "Conversation")
+              : "Nova AI"}
           </div>
           <div className="chat-header-user">
-            <span className="org-name">{organization?.name ?? 'No organization'}</span>
-            <button className="billing-btn" onClick={() => setShowBilling(true)}>
+            <span className="org-name">
+              {organization?.name ?? "No organization"}
+            </span>
+            <button
+              className="billing-btn"
+              onClick={() => setShowSearch(true)}
+              title="Search workspace"
+            >
+              <SearchIcon />
+              Search
+            </button>
+            <button
+              className="billing-btn"
+              onClick={() => setShowProjects(true)}
+              title="Projects"
+            >
+              Projects
+            </button>
+            <button
+              className="billing-btn"
+              onClick={exportConversation}
+              disabled={messages.length === 0}
+              title="Export conversation as Markdown"
+            >
+              Export
+            </button>
+            <button
+              className="billing-btn"
+              onClick={() => setShowBilling(true)}
+            >
               Billing
             </button>
             <span className="user-avatar">
-              {(user?.full_name ?? user?.email ?? '?').charAt(0).toUpperCase()}
+              {(user?.full_name ?? user?.email ?? "?").charAt(0).toUpperCase()}
             </span>
             <button className="sign-out" onClick={handleSignOut}>
               Sign out
@@ -479,14 +656,21 @@ export default function ChatPage() {
             </div>
           )}
           {messages.map((m) => (
-            <div key={m.id} className={`message-row ${m.role}${m.id === editId ? ' editing' : ''}`}>
-              <div className="message-avatar">{m.role === 'user' ? 'You' : 'AI'}</div>
+            <div
+              key={m.id}
+              className={`message-row ${m.role}${m.id === editId ? " editing" : ""}`}
+            >
+              <div className="message-avatar">
+                {m.role === "user" ? "You" : "AI"}
+              </div>
               <div className="message-main">
                 <div className="message-bubble">
                   <div className="message-head">
                     <span className="message-role-label">
-                      {m.role === 'user' ? 'You' : 'Nova'}
-                      {m.is_edited && <span className="edited-tag"> (edited)</span>}
+                      {m.role === "user" ? "You" : "Nova"}
+                      {m.is_edited && (
+                        <span className="edited-tag"> (edited)</span>
+                      )}
                     </span>
                   </div>
                   {m.id === editId ? (
@@ -495,8 +679,9 @@ export default function ChatPage() {
                         value={editText}
                         onChange={(e) => setEditText(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveEdit();
-                          if (e.key === 'Escape') cancelEdit();
+                          if (e.key === "Enter" && (e.ctrlKey || e.metaKey))
+                            saveEdit();
+                          if (e.key === "Escape") cancelEdit();
                         }}
                       />
                       <div className="edit-actions">
@@ -510,7 +695,11 @@ export default function ChatPage() {
                     </div>
                   ) : (
                     <div className="message-content">
-                      {m.role === 'assistant' ? <Markdown text={m.content} /> : m.content}
+                      {m.role === "assistant" ? (
+                        <Markdown text={m.content} />
+                      ) : (
+                        m.content
+                      )}
                       {m.streaming && <span className="cursor-blink" />}
                     </div>
                   )}
@@ -522,12 +711,14 @@ export default function ChatPage() {
                       title="Open PDF"
                     >
                       <span className="file-chip-icon">PDF</span>
-                      <span className="file-chip-name">{m.attachment.name}</span>
+                      <span className="file-chip-name">
+                        {m.attachment.name}
+                      </span>
                       <span className="file-chip-open">Open</span>
                     </button>
                   )}
                 </div>
-                {m.role === 'assistant' &&
+                {m.role === "assistant" &&
                   m.citations &&
                   m.citations.length > 0 &&
                   !m.streaming && (
@@ -543,23 +734,34 @@ export default function ChatPage() {
                             rel="noreferrer"
                           >
                             <span className="source-idx">{c.index}</span>
-                            <span className="source-title">{c.title ?? c.url}</span>
+                            <span className="source-title">
+                              {c.title ?? c.url}
+                            </span>
                           </a>
                         ))}
                       </div>
                     </div>
                   )}
-                {!m.streaming && m.id && !m.id.startsWith('local-') && (
+                {!m.streaming && m.id && !m.id.startsWith("local-") && (
                   <div className="message-footer">
-                    <button className="msg-action" onClick={() => copyMessage(m)}>
+                    <button
+                      className="msg-action"
+                      onClick={() => copyMessage(m)}
+                    >
                       Copy
                     </button>
-                    {m.role === 'user' && (
-                      <button className="msg-action" onClick={() => startEdit(m)}>
+                    {m.role === "user" && (
+                      <button
+                        className="msg-action"
+                        onClick={() => startEdit(m)}
+                      >
                         Edit
                       </button>
                     )}
-                    <button className="msg-action danger" onClick={() => removeMessage(m)}>
+                    <button
+                      className="msg-action danger"
+                      onClick={() => removeMessage(m)}
+                    >
                       Delete
                     </button>
                   </div>
@@ -570,7 +772,11 @@ export default function ChatPage() {
         </div>
 
         {showDownArrow && (
-          <button className="scroll-down" onClick={scrollToBottom} title="Scroll to latest">
+          <button
+            className="scroll-down"
+            onClick={scrollToBottom}
+            title="Scroll to latest"
+          >
             <ChevronDownIcon />
           </button>
         )}
@@ -581,32 +787,38 @@ export default function ChatPage() {
               className="composer-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={activeId ? 'Ask Nova anything…' : 'Create a conversation first'}
+              placeholder={
+                activeId ? "Ask Nova anything…" : "Create a conversation first"
+              }
               disabled={!activeId || busy}
             />
             <div className="composer-box-footer">
               <div className="composer-icons">
                 <button
                   type="button"
-                  className={`icon-btn${agentsMenuOpen ? ' active' : ''}${selectedAgent ? ' active' : ''}`}
+                  className={`icon-btn${agentsMenuOpen ? " active" : ""}${selectedAgent ? " active" : ""}`}
                   title="Chat with an agent"
                   onClick={() => setAgentsMenuOpen((o) => !o)}
                 >
                   <BotIcon />
-                  {selectedAgentName && <span className="kb-chip">{selectedAgentName}</span>}
+                  {selectedAgentName && (
+                    <span className="kb-chip">{selectedAgentName}</span>
+                  )}
                 </button>
                 <button
                   type="button"
-                  className={`icon-btn${kbMenuOpen ? ' active' : ''}`}
+                  className={`icon-btn${kbMenuOpen ? " active" : ""}`}
                   title="Knowledge base"
                   onClick={() => setKbMenuOpen((o) => !o)}
                 >
                   <FolderIcon />
-                  {selectedKbName && <span className="kb-chip">{selectedKbName}</span>}
+                  {selectedKbName && (
+                    <span className="kb-chip">{selectedKbName}</span>
+                  )}
                 </button>
                 <button
                   type="button"
-                  className={`icon-btn${webSearch ? ' active' : ''}`}
+                  className={`icon-btn${webSearch ? " active" : ""}`}
                   title="Live web search"
                   onClick={() => setWebSearch((v) => !v)}
                 >
@@ -614,7 +826,16 @@ export default function ChatPage() {
                 </button>
                 <button
                   type="button"
-                  className={`icon-btn${uploading ? ' busy' : ''}`}
+                  className={`icon-btn${recording ? " recording" : ""}${transcribing ? " busy" : ""}`}
+                  title={recording ? "Stop recording" : "Speak your message"}
+                  disabled={transcribing}
+                  onClick={toggleRecording}
+                >
+                  <MicIcon />
+                </button>
+                <button
+                  type="button"
+                  className={`icon-btn${uploading ? " busy" : ""}`}
                   title="Upload a PDF — Nova will ask what details you need"
                   disabled={uploading}
                   onClick={handleAttachClick}
@@ -623,7 +844,11 @@ export default function ChatPage() {
                 </button>
               </div>
               {busy ? (
-                <button type="button" className="composer-stop" onClick={handleStop}>
+                <button
+                  type="button"
+                  className="composer-stop"
+                  onClick={handleStop}
+                >
                   Stop
                 </button>
               ) : (
@@ -643,11 +868,13 @@ export default function ChatPage() {
                   <button
                     className="kb-menu-item"
                     onClick={() => {
-                      setSelectedAgent('');
+                      setSelectedAgent("");
                       setAgentsMenuOpen(false);
                     }}
                   >
-                    <span className="kb-menu-clear">Chat with Nova (default)</span>
+                    <span className="kb-menu-clear">
+                      Chat with Nova (default)
+                    </span>
                   </button>
                 )}
                 {agents.length === 0 && (
@@ -656,13 +883,15 @@ export default function ChatPage() {
                 {agents.map((a) => (
                   <button
                     key={a.id}
-                    className={`kb-menu-item${selectedAgent === a.id ? ' selected' : ''}`}
+                    className={`kb-menu-item${selectedAgent === a.id ? " selected" : ""}`}
                     onClick={() => {
                       setSelectedAgent(a.id);
                       setAgentsMenuOpen(false);
                     }}
                   >
-                    <span className="kb-menu-check">{selectedAgent === a.id && <CheckIcon />}</span>
+                    <span className="kb-menu-check">
+                      {selectedAgent === a.id && <CheckIcon />}
+                    </span>
                     <span className="kb-menu-name">{a.name}</span>
                     <span className="kb-menu-count">{a.model_provider}</span>
                   </button>
@@ -684,7 +913,7 @@ export default function ChatPage() {
                   <button
                     className="kb-menu-item"
                     onClick={() => {
-                      setSelectedKb('');
+                      setSelectedKb("");
                       setKbMenuOpen(false);
                     }}
                   >
@@ -697,15 +926,19 @@ export default function ChatPage() {
                 {knowledgeBases.map((kb) => (
                   <button
                     key={kb.id}
-                    className={`kb-menu-item${selectedKb === kb.id ? ' selected' : ''}`}
+                    className={`kb-menu-item${selectedKb === kb.id ? " selected" : ""}`}
                     onClick={() => {
                       setSelectedKb(kb.id);
                       setKbMenuOpen(false);
                     }}
                   >
-                    <span className="kb-menu-check">{selectedKb === kb.id && <CheckIcon />}</span>
+                    <span className="kb-menu-check">
+                      {selectedKb === kb.id && <CheckIcon />}
+                    </span>
                     <span className="kb-menu-name">{kb.name}</span>
-                    <span className="kb-menu-count">{kb.total_chunks} chunks</span>
+                    <span className="kb-menu-count">
+                      {kb.total_chunks} chunks
+                    </span>
                   </button>
                 ))}
                 <button
@@ -715,7 +948,9 @@ export default function ChatPage() {
                     setShowKbManager(true);
                   }}
                 >
-                  <span className="kb-menu-clear">+ Manage knowledge bases</span>
+                  <span className="kb-menu-clear">
+                    + Manage knowledge bases
+                  </span>
                 </button>
               </div>
             )}
@@ -731,19 +966,39 @@ export default function ChatPage() {
       </main>
 
       {showBilling && (
-        <BillingModal organizationId={organization?.id} onClose={() => setShowBilling(false)} />
+        <BillingModal
+          organizationId={organization?.id}
+          onClose={() => setShowBilling(false)}
+        />
       )}
       {showAgents && (
-        <AgentsPanel knowledgeBases={knowledgeBases} onClose={() => setShowAgents(false)} />
+        <AgentsPanel
+          knowledgeBases={knowledgeBases}
+          onClose={() => setShowAgents(false)}
+        />
       )}
       {showKbManager && (
         <KBManagerModal
           knowledgeBases={knowledgeBases}
-          selectedKb={selectedKb || knowledgeBases[0]?.id || ''}
+          selectedKb={selectedKb || knowledgeBases[0]?.id || ""}
           onClose={() => setShowKbManager(false)}
           onChanged={() => {
-            api.listKnowledgeBases().then((res) => setKnowledgeBases(res.knowledge_bases));
+            api
+              .listKnowledgeBases()
+              .then((res) => setKnowledgeBases(res.knowledge_bases));
           }}
+        />
+      )}
+      {showSearch && (
+        <SearchModal
+          onClose={() => setShowSearch(false)}
+          onOpenConversation={(id) => setActiveId(id)}
+        />
+      )}
+      {showProjects && (
+        <ProjectsModal
+          organizationId={organization?.id}
+          onClose={() => setShowProjects(false)}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

@@ -91,6 +91,7 @@ class MessageStreamRequest(BaseModel):
     use_web_search: bool = False
     agent_id: Optional[UUID] = None
     files: Optional[List[UUID]] = None
+    user_message_id: Optional[UUID] = None
 
 
 def _message_dict(message: Message) -> dict:
@@ -332,22 +333,38 @@ async def stream_message(
     if not conversation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
-    # Persist the user message
-    user_message = Message(
-        conversation_id=conversation_id,
-        user_id=current_user.id,
-        role=MessageRole.USER,
-        type=MessageType.TEXT,
-        content=request.content,
-        status=MessageStatus.COMPLETED,
-        attachments=[
-            {"file_id": str(fid), "type": "file"}
-            for fid in (request.files or [])
-        ],
-        metadata_={"agent_id": str(request.agent_id)} if request.agent_id else {},
-    )
-    db.add(user_message)
-    await db.flush()
+    user_message = None
+    if request.user_message_id:
+        result = await db.execute(
+            select(Message).where(
+                Message.id == request.user_message_id,
+                Message.conversation_id == conversation_id,
+                Message.role == MessageRole.USER,
+                Message.user_id == current_user.id,
+            )
+        )
+        user_message = result.scalar_one_or_none()
+        if not user_message:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User message not found")
+        user_message.content = request.content
+        user_message.is_edited = True
+        await db.flush()
+    else:
+        user_message = Message(
+            conversation_id=conversation_id,
+            user_id=current_user.id,
+            role=MessageRole.USER,
+            type=MessageType.TEXT,
+            content=request.content,
+            status=MessageStatus.COMPLETED,
+            attachments=[
+                {"file_id": str(fid), "type": "file"}
+                for fid in (request.files or [])
+            ],
+            metadata_={"agent_id": str(request.agent_id)} if request.agent_id else {},
+        )
+        db.add(user_message)
+        await db.flush()
 
     assistant_message = Message(
         conversation_id=conversation_id,
@@ -363,7 +380,8 @@ async def stream_message(
     await db.commit()
 
     conversation.last_message_at = datetime.utcnow()
-    conversation.message_count += 1
+    if not request.user_message_id:
+        conversation.message_count += 1
     await db.commit()
 
     from app.ai.chat import stream_chat_response

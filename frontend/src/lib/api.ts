@@ -167,6 +167,7 @@ export async function streamChat(
   signal?: AbortSignal,
   knowledgeBaseIds?: string[],
   useWebSearch = false,
+  agentId?: string,
 ): Promise<void> {
   const token = getToken();
   const body: Record<string, unknown> = { content, stream: true };
@@ -175,6 +176,9 @@ export async function streamChat(
   }
   if (useWebSearch) {
     body.use_web_search = true;
+  }
+  if (agentId) {
+    body.agent_id = agentId;
   }
   const resp = await fetch(`${API_BASE}/messages/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
@@ -214,6 +218,55 @@ export async function streamChat(
   }
 }
 
+// ---- Agents ----
+
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string | null;
+  model_provider: string;
+  model: string;
+  temperature: number;
+  system_prompt?: string | null;
+  knowledge_base_ids: string[];
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentInput {
+  name: string;
+  description?: string;
+  model_provider: string;
+  model?: string;
+  temperature?: number;
+  system_prompt?: string;
+  knowledge_base_ids?: string[];
+}
+
+export async function listAgents(): Promise<Agent[]> {
+  const resp = await request<{ agents: Agent[] }>('/agents');
+  return resp.agents ?? [];
+}
+
+export async function createAgent(input: AgentInput): Promise<Agent> {
+  return request<Agent>('/agents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAgent(id: string, input: Partial<AgentInput>): Promise<Agent> {
+  return request<Agent>(`/agents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  await request<unknown>(`/agents/${id}`, { method: 'DELETE' });
+}
+
 // ---- Knowledge bases & files ----
 
 export async function listKnowledgeBases(): Promise<KnowledgeBaseListResponse> {
@@ -227,6 +280,42 @@ export async function createKnowledgeBase(
   return request<KnowledgeBase>('/knowledge-bases', {
     method: 'POST',
     body: JSON.stringify({ name, description }),
+  });
+}
+
+export async function deleteKnowledgeBase(kbId: string): Promise<void> {
+  await request<unknown>(`/knowledge-bases/${kbId}`, { method: 'DELETE' });
+}
+
+export interface KnowledgeBaseDocument {
+  id: string;
+  knowledge_base_id: string;
+  title: string;
+  content?: string | null;
+  source_type: string;
+  source_url?: string | null;
+  source_metadata: Record<string, unknown>;
+  status: string;
+  chunk_count: number;
+  uploaded_by: string;
+  created_at: string;
+}
+
+export async function listKnowledgeBaseDocuments(
+  kbId: string,
+): Promise<KnowledgeBaseDocument[]> {
+  const resp = await request<{ documents: KnowledgeBaseDocument[] }>(
+    `/knowledge-bases/${kbId}/documents`,
+  );
+  return resp.documents ?? [];
+}
+
+export async function deleteKnowledgeBaseDocument(
+  kbId: string,
+  docId: string,
+): Promise<void> {
+  await request<unknown>(`/knowledge-bases/${kbId}/documents/${docId}`, {
+    method: 'DELETE',
   });
 }
 

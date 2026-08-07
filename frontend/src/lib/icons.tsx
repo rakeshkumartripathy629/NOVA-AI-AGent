@@ -142,3 +142,43 @@ export function TrashIcon({ size = 15 }: IconProps) {
     </svg>
   );
 }
+
+export function BotIcon({ size = 18 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="8" width="16" height="12" rx="3" />
+      <path d="M12 8V4" />
+      <circle cx="12" cy="3" r="1" />
+      <circle cx="9" cy="13" r="1" />
+      <circle cx="15" cy="13" r="1" />
+      <path d="M9 16h6" />
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = 16 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="11" cy="11" r="8" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  );
+}

@@ -87,7 +87,7 @@ async def stream_chat_response(
     tools: Optional[List[Dict[str, Any]]] = None,
     system_prompt: Optional[str] = None,
     knowledge_base_ids: Optional[List[UUID]] = None,
-    use_web_search: bool = False,
+    use_web_search: bool = True,
     agent_id: Optional[UUID] = None,
     file_ids: Optional[List[UUID]] = None,
     provider_name: Optional[str] = None,
@@ -107,20 +107,18 @@ async def stream_chat_response(
 
     # RAG context
     citations: List[Dict[str, Any]] = []
+    base_system_prompt = system_prompt or "You are a helpful assistant."
     if knowledge_base_ids:
         retrieved = await _retrieve_context(conversation.id, knowledge_base_ids, user_message_content)
-        source_prefix = system_prompt or "You are a helpful assistant."
         if retrieved:
             context_block = "\n\n".join(
                 f"[{i + 1}] {r['content']}" for i, r in enumerate(retrieved)
             )
             system_prompt = (
-                f"{source_prefix}\n\n"
-                f"Answer the user's question using ONLY the retrieved context below. "
-                f"Do not add any facts, guesses or general knowledge that is not present in the context. "
-                f"If the context does not contain the answer, reply exactly: "
-                f"\"I couldn't find that in the uploaded documents.\" "
-                f"Keep the answer short and relevant to what was asked. Cite sources as [n].\n\n"
+                f"{base_system_prompt}\n\n"
+                f"Answer the user's question using the retrieved context below. "
+                f"If the context does not contain the answer, use live web search results if available. "
+                f"Keep the answer short and relevant. Cite sources as [n].\n\n"
                 f"Context:\n{context_block}"
             )
             citations = [
@@ -134,12 +132,7 @@ async def stream_chat_response(
                 for i, r in enumerate(retrieved)
             ]
         else:
-            system_prompt = (
-                f"{source_prefix}\n\n"
-                f"The user has attached documents but nothing relevant to their question was found. "
-                f"Reply exactly: \"I couldn't find that in the uploaded documents.\" "
-                f"Do not use general knowledge or make anything up."
-            )
+            system_prompt = base_system_prompt
 
     # Web search augmentation
     if use_web_search:
@@ -148,8 +141,7 @@ async def stream_chat_response(
 
             search_context, search_citations = await web_search_augment(user_message_content)
             if search_context:
-                base = system_prompt or "You are a helpful assistant."
-                system_prompt = f"{base}\n\nLive web search results:\n{search_context}"
+                system_prompt = f"{system_prompt or base_system_prompt}\n\nLive web search results:\n{search_context}"
                 citations.extend(search_citations)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Web search failed: %s", exc)
@@ -163,6 +155,21 @@ async def stream_chat_response(
 
     provider = get_provider(provider_name) if provider_name else default_provider()
 
+    # MCP tools integration
+    mcp_tools = []
+    if settings.MCP_ENABLED:
+        try:
+            from app.ai.mcp_client import get_mcp_tools, execute_mcp_tool_calls
+            mcp_tools = await get_mcp_tools()
+            if mcp_tools:
+                from app.ai.mcp_client import mcp_tools_to_openai_functions
+                mcp_functions = mcp_tools_to_openai_functions(mcp_tools)
+                if tools is None:
+                    tools = []
+                tools = tools + mcp_functions
+        except Exception as exc:
+            logger.warning("MCP tools fetch failed: %s", exc)
+
     try:
         async for event in provider.stream(
             messages=messages,
@@ -172,6 +179,25 @@ async def stream_chat_response(
             tools=tools,
             system_prompt=system_prompt,
         ):
+            if event.get("type") == "tool_call":
+                if mcp_tools:
+                    try:
+                        tool_results = await execute_mcp_tool_calls([event])
+                        for tr in tool_results:
+                            messages.append({"role": "assistant", "content": None, "tool_calls": [event]})
+                            messages.append({"role": "tool", "content": tr["content"]})
+                        async for retry_event in provider.stream(
+                            messages=messages,
+                            model=model,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tools=tools,
+                            system_prompt=system_prompt,
+                        ):
+                            yield retry_event
+                        return
+                    except Exception as exc:
+                        logger.warning("MCP tool execution failed: %s", exc)
             yield event
     except ProviderError as exc:
         yield {"type": "error", "message": str(exc)}

@@ -3,8 +3,11 @@ import * as api from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import Sidebar from './Sidebar';
 import BillingModal from './BillingModal';
+import AgentsPanel from './AgentsPanel';
+import KBManagerModal from './KBManagerModal';
 import Markdown from '../lib/Markdown';
 import {
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
@@ -61,6 +64,11 @@ export default function ChatPage() {
   const [editText, setEditText] = useState('');
   const [toast, setToast] = useState('');
   const [showBilling, setShowBilling] = useState(false);
+  const [showAgents, setShowAgents] = useState(false);
+  const [showKbManager, setShowKbManager] = useState(false);
+  const [agents, setAgents] = useState<api.Agent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string>('');
+  const [agentsMenuOpen, setAgentsMenuOpen] = useState(false);
   const [showDownArrow, setShowDownArrow] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -80,6 +88,9 @@ export default function ChatPage() {
     });
     api.listKnowledgeBases().then((res) => {
       setKnowledgeBases(res.knowledge_bases);
+    });
+    api.listAgents().then((res) => {
+      setAgents(res);
     });
     const savedState = localStorage.getItem(CHAT_STATE_KEY);
     if (savedState) {
@@ -196,6 +207,7 @@ export default function ChatPage() {
     conversationId: string,
     kbs?: string[],
     ws?: boolean,
+    agentId?: string,
   ) => {
     const userMsg: ChatMessage = { id: `local-${Date.now()}`, role: 'user', content };
     const assistantMsg: ChatMessage = {
@@ -264,6 +276,7 @@ export default function ChatPage() {
         controller.signal,
         kbs,
         ws,
+        agentId,
       );
     } catch (err) {
       setMessages((prev) => {
@@ -289,7 +302,7 @@ export default function ChatPage() {
     const content = input.trim();
     if (!content || busy || !activeId) return;
     setInput('');
-    await runStream(content, activeId, knowledgeBaseIds, webSearch);
+    await runStream(content, activeId, knowledgeBaseIds, webSearch, selectedAgent || undefined);
   };
 
   const handleStop = () => abortRef.current?.abort();
@@ -318,7 +331,7 @@ export default function ChatPage() {
       toDelete.map((x) => api.deleteMessage(activeId, x.id).catch(() => undefined)),
     );
     setMessages((prev) => prev.slice(0, idx));
-    await runStream(text, activeId, knowledgeBaseIds, webSearch);
+    await runStream(text, activeId, knowledgeBaseIds, webSearch, selectedAgent || undefined);
   };
 
   const copyMessage = async (m: ChatMessage) => {
@@ -426,6 +439,7 @@ export default function ChatPage() {
 
   const knowledgeBaseIds = selectedKb ? [selectedKb] : undefined;
   const selectedKbName = knowledgeBases.find((k) => k.id === selectedKb)?.name ?? '';
+  const selectedAgentName = agents.find((a) => a.id === selectedAgent)?.name ?? '';
 
   return (
     <div className="app-shell">
@@ -574,6 +588,15 @@ export default function ChatPage() {
               <div className="composer-icons">
                 <button
                   type="button"
+                  className={`icon-btn${agentsMenuOpen ? ' active' : ''}${selectedAgent ? ' active' : ''}`}
+                  title="Chat with an agent"
+                  onClick={() => setAgentsMenuOpen((o) => !o)}
+                >
+                  <BotIcon />
+                  {selectedAgentName && <span className="kb-chip">{selectedAgentName}</span>}
+                </button>
+                <button
+                  type="button"
                   className={`icon-btn${kbMenuOpen ? ' active' : ''}`}
                   title="Knowledge base"
                   onClick={() => setKbMenuOpen((o) => !o)}
@@ -614,6 +637,47 @@ export default function ChatPage() {
                 </button>
               )}
             </div>
+            {agentsMenuOpen && (
+              <div className="kb-menu">
+                {selectedAgent && (
+                  <button
+                    className="kb-menu-item"
+                    onClick={() => {
+                      setSelectedAgent('');
+                      setAgentsMenuOpen(false);
+                    }}
+                  >
+                    <span className="kb-menu-clear">Chat with Nova (default)</span>
+                  </button>
+                )}
+                {agents.length === 0 && (
+                  <div className="kb-menu-empty">No agents yet</div>
+                )}
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    className={`kb-menu-item${selectedAgent === a.id ? ' selected' : ''}`}
+                    onClick={() => {
+                      setSelectedAgent(a.id);
+                      setAgentsMenuOpen(false);
+                    }}
+                  >
+                    <span className="kb-menu-check">{selectedAgent === a.id && <CheckIcon />}</span>
+                    <span className="kb-menu-name">{a.name}</span>
+                    <span className="kb-menu-count">{a.model_provider}</span>
+                  </button>
+                ))}
+                <button
+                  className="kb-menu-item"
+                  onClick={() => {
+                    setAgentsMenuOpen(false);
+                    setShowAgents(true);
+                  }}
+                >
+                  <span className="kb-menu-clear">+ Manage agents</span>
+                </button>
+              </div>
+            )}
             {kbMenuOpen && (
               <div className="kb-menu">
                 {selectedKb && (
@@ -644,6 +708,15 @@ export default function ChatPage() {
                     <span className="kb-menu-count">{kb.total_chunks} chunks</span>
                   </button>
                 ))}
+                <button
+                  className="kb-menu-item"
+                  onClick={() => {
+                    setKbMenuOpen(false);
+                    setShowKbManager(true);
+                  }}
+                >
+                  <span className="kb-menu-clear">+ Manage knowledge bases</span>
+                </button>
               </div>
             )}
             <input
@@ -659,6 +732,19 @@ export default function ChatPage() {
 
       {showBilling && (
         <BillingModal organizationId={organization?.id} onClose={() => setShowBilling(false)} />
+      )}
+      {showAgents && (
+        <AgentsPanel knowledgeBases={knowledgeBases} onClose={() => setShowAgents(false)} />
+      )}
+      {showKbManager && (
+        <KBManagerModal
+          knowledgeBases={knowledgeBases}
+          selectedKb={selectedKb || knowledgeBases[0]?.id || ''}
+          onClose={() => setShowKbManager(false)}
+          onChanged={() => {
+            api.listKnowledgeBases().then((res) => setKnowledgeBases(res.knowledge_bases));
+          }}
+        />
       )}
       {toast && <div className="toast">{toast}</div>}
     </div>

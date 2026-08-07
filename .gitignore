@@ -37,3 +37,6 @@ Thumbs.db
 
 # Test / temp
 tmp/
+
+# Local user-uploaded files — NEVER commit
+backend/storage_local/

@@ -31,9 +31,34 @@ def _extract_text(filename: str, mime_type: str, content: bytes) -> str:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(content))
-            return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+            if text.strip():
+                return text
         except Exception as exc:  # noqa: BLE001
             logger.warning("PDF extraction failed: %s", exc)
+
+        try:
+            import fitz 
+
+            ocr_texts = []
+            doc = fitz.open(stream=content, filetype="pdf")
+            try:
+                import easyocr
+
+                reader = easyocr.Reader(["en"], verbose=False)
+                for page in doc:
+                    pix = page.get_pixmap(dpi=200)
+                    img_bytes = pix.tobytes("png")
+                    result = reader.readtext(img_bytes, detail=0, paragraph=True)
+                    if result:
+                        ocr_texts.append("\n".join(result))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("OCR failed: %s", exc)
+            doc.close()
+            if ocr_texts:
+                return "\n\n".join(ocr_texts)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PDF OCR fallback failed: %s", exc)
 
     if lower.endswith((".docx", ".doc")):
         try:

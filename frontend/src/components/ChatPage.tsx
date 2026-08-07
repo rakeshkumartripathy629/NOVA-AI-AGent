@@ -304,6 +304,22 @@ export default function ChatPage() {
             api
               .listConversations()
               .then((res) => setConversations(res.conversations));
+            api
+              .listMessages(conversationId)
+              .then((res) => {
+                setMessages(
+                  res.messages.map((m) => ({
+                    id: m.id,
+                    role: m.role,
+                    content: m.content ?? "",
+                    is_edited: m.is_edited,
+                    citations: Array.isArray(m.citations)
+                      ? (m.citations as api.Citation[])
+                      : undefined,
+                  })),
+                );
+              })
+              .catch(() => undefined);
           }
         },
         controller.signal,
@@ -742,7 +758,7 @@ export default function ChatPage() {
                       </div>
                     </div>
                   )}
-                {!m.streaming && m.id && !m.id.startsWith("local-") && (
+                {!m.streaming && (
                   <div className="message-footer">
                     <button
                       className="msg-action"

@@ -110,8 +110,10 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
-    GROQ_EMBEDDING_MODEL: str = "nomic-embed-text-v1.5"
-    GROQ_EMBEDDING_DIMENSION: int = 768
+
+    # Local embeddings (free, no API key) — used when no API embedding provider is set
+    LOCAL_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    LOCAL_EMBEDDING_DIMENSION: int = 384
     
     # Embedding Models
     EMBEDDING_MODEL: str = "text-embedding-3-small"

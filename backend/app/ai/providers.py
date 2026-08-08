@@ -240,7 +240,7 @@ class GeminiProvider(ChatProvider):
 
 
 class GroqProvider(OpenAIProvider):
-    """Groq is OpenAI-compatible: chat, embeddings and transcription."""
+    """Groq is OpenAI-compatible for chat and transcription (no embeddings)."""
 
     name = "groq"
 
@@ -250,7 +250,9 @@ class GroqProvider(OpenAIProvider):
             base_url=base_url or settings.GROQ_BASE_URL,
         )
         self.default_model = settings.GROQ_MODEL
-        self.embedding_model = settings.GROQ_EMBEDDING_MODEL
+
+    async def embed(self, texts, model=None):
+        raise ProviderError("Groq does not provide embedding models; using local embeddings instead")
 
     async def transcribe(self, audio_bytes, **kwargs):
         if not self.api_key:
@@ -264,6 +266,37 @@ class GroqProvider(OpenAIProvider):
             file=("audio.webm", audio_bytes),
         )
         return transcript.text
+
+
+class LocalEmbeddingProvider(ChatProvider):
+    """Local embeddings via sentence-transformers — free, no API key needed."""
+
+    name = "local"
+
+    def __init__(self, model: Optional[str] = None) -> None:
+        self.model_name = model or settings.LOCAL_EMBEDDING_MODEL
+        self._model = None
+
+    def _load(self):
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(self.model_name)
+        return self._model
+
+    async def embed(self, texts, model=None):
+        if not texts:
+            return []
+        import asyncio
+
+        st_model = await asyncio.to_thread(self._load)
+        vectors = await asyncio.to_thread(
+            st_model.encode, list(texts), normalize_embeddings=True
+        )
+        return [v.tolist() for v in vectors]
+
+    def dimension(self) -> int:
+        return settings.LOCAL_EMBEDDING_DIMENSION
 
 
 class OpenRouterProvider(OpenAIProvider):
@@ -583,22 +616,20 @@ def default_provider() -> ChatProvider:
 
 
 def embedding_provider() -> ChatProvider:
-    """Choose the provider used for embeddings."""
+    """Choose the provider used for embeddings (falls back to local, no key needed)."""
     if settings.GEMINI_API_KEY:
         return GeminiProvider()
     if settings.OPENAI_API_KEY:
         return OpenAIProvider()
     if settings.OPENROUTER_API_KEY:
         return OpenRouterProvider()
-    if settings.GROQ_API_KEY:
-        return GroqProvider()
-    return default_provider()
+    return LocalEmbeddingProvider()
 
 
 def embedding_dimension() -> int:
     """Return the embedding vector dimension for the active provider."""
-    if settings.GROQ_API_KEY and not any(
-        (settings.GEMINI_API_KEY, settings.OPENAI_API_KEY, settings.OPENROUTER_API_KEY)
-    ):
-        return settings.GROQ_EMBEDDING_DIMENSION
-    return settings.EMBEDDING_DIMENSION
+    if settings.GEMINI_API_KEY:
+        return settings.GEMINI_EMBEDDING_DIMENSION
+    if settings.OPENAI_API_KEY or settings.OPENROUTER_API_KEY:
+        return settings.EMBEDDING_DIMENSION
+    return settings.LOCAL_EMBEDDING_DIMENSION

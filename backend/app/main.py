@@ -1,6 +1,7 @@
 """
 Main FastAPI application entry point.
 """
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from sqlalchemy.exc import SQLAlchemyError
@@ -46,8 +47,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Starting %s v%s", settings.APP_NAME, settings.APP_VERSION)
 
-    # Initialize database
-    await init_db()
+    # Initialize database. Retry so a slow/provisioning database doesn't crash
+    # startup immediately; give up with a clear log line if it never connects.
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await init_db()
+            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Database init failed (attempt %s/%s): %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+            if attempt == max_attempts:
+                logger.error("Database init failed after %s attempts; aborting startup", max_attempts)
+                raise
+            await asyncio.sleep(5)
     logger.info("Database initialized")
 
     # Check database connection

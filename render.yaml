@@ -21,6 +21,8 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: PORT
+        value: "10000"
       - key: DEBUG
         value: "false"
       - key: SECRET_KEY
@@ -40,9 +42,9 @@ services:
           name: nova-ai-db
           property: connectionString
       - key: FRONTEND_URL
-        value: https://nova-ai.onrender.com
+        value: https://nova-ai-5q5v.onrender.com
       - key: CORS_ORIGINS
-        value: https://nova-ai.onrender.com
+        value: https://nova-ai-5q5v.onrender.com
       - key: FIRST_SUPERUSER_EMAIL
         sync: false
       - key: FIRST_SUPERUSER_PASSWORD

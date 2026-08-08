@@ -29,7 +29,7 @@ def _configure_processors(environment: str) -> list:
     else:
         shared += [
             structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer(serializer=_json_default),
+            structlog.processors.JSONRenderer(default=_json_default),
         ]
     return shared
 

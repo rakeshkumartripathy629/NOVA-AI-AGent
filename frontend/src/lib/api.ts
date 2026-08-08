@@ -155,6 +155,16 @@ export async function logout(): Promise<void> {
   }
 }
 
+// ---- OAuth ----
+
+export async function getOAuthProviders(): Promise<{ google: boolean; github: boolean }> {
+  return request<{ google: boolean; github: boolean }>('/auth/oauth/config');
+}
+
+export function startOAuth(provider: 'google' | 'github'): void {
+  window.location.assign(`${API_BASE}/auth/oauth/${provider}`);
+}
+
 // ---- Conversations ----
 
 export async function listConversations(): Promise<ConversationListResponse> {

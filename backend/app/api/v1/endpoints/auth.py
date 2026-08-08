@@ -2,14 +2,19 @@
 Authentication endpoints.
 """
 import re
+import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlencode
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -30,6 +35,7 @@ from app.core.security import (
 )
 from app.db.session import get_db
 from app.models.user import User, UserRole, UserStatus, AuthProvider
+from app.models.user_session import OAuthAccount
 from app.models.organization import Organization, OrganizationMember, OrganizationRole
 
 
@@ -313,7 +319,7 @@ async def login(
     )
     user = result.scalar_one_or_none()
     
-    if not user or not verify_password(password, user.hashed_password):
+    if not user or not user.hashed_password or not verify_password(password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -829,30 +835,380 @@ async def switch_organization(
 
 
 # OAuth endpoints
+OAUTH_STATE_COOKIE = "oauth_state"
+
+
+def _oauth_redirect_uri(provider: str) -> str:
+    """Build the OAuth redirect URI for the given provider.
+
+    The callback lives on the API and is served on the same origin as the
+    frontend (nginx proxies /api/v1), so it is derived from FRONTEND_URL.
+    """
+    return f"{settings.FRONTEND_URL}/api/v1/auth/oauth/callback/{provider}"
+
+
+def _oauth_enabled(provider: str) -> bool:
+    if provider == "google":
+        return bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET)
+    if provider == "github":
+        return bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET)
+    return False
+
+
+def _oauth_credentials(provider: str) -> tuple[str, str]:
+    if provider == "google":
+        return settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET
+    if provider == "github":
+        return settings.GITHUB_CLIENT_ID, settings.GITHUB_CLIENT_SECRET
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Unsupported OAuth provider",
+    )
+
+
+@router.get("/oauth/config", summary="OAuth provider availability")
+async def oauth_config() -> dict:
+    """Return which OAuth providers are configured and enabled."""
+    return {
+        "google": _oauth_enabled("google"),
+        "github": _oauth_enabled("github"),
+    }
+
+
+async def _start_oauth(provider: str, request: Request) -> RedirectResponse:
+    if not _oauth_enabled(provider):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{provider.title()} OAuth is not configured",
+        )
+    client_id, _ = _oauth_credentials(provider)
+    state = secrets.token_urlsafe(32)
+    redirect_uri = _oauth_redirect_uri(provider)
+
+    if provider == "google":
+        # prompt=select_account always shows Google's account chooser so the
+        # user can pick any of the Google accounts signed in on this machine.
+        auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            + urlencode(
+                {
+                    "client_id": client_id,
+                    "redirect_uri": redirect_uri,
+                    "response_type": "code",
+                    "scope": "openid email profile",
+                    "state": state,
+                    "prompt": "select_account",
+                    "access_type": "online",
+                }
+            )
+        )
+    else:
+        auth_url = (
+            "https://github.com/login/oauth/authorize?"
+            + urlencode(
+                {
+                    "client_id": client_id,
+                    "redirect_uri": redirect_uri,
+                    "scope": "read:user user:email",
+                    "state": state,
+                }
+            )
+        )
+
+    response = RedirectResponse(auth_url, status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=state,
+        max_age=600,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
 @router.get("/oauth/google", summary="Google OAuth login")
-async def google_oauth():
+async def google_oauth(request: Request):
     """Initiate Google OAuth flow."""
-    # TODO: Implement Google OAuth
-    return {"message": "Google OAuth not implemented yet"}
+    return await _start_oauth("google", request)
 
 
 @router.get("/oauth/github", summary="GitHub OAuth login")
-async def github_oauth():
+async def github_oauth(request: Request):
     """Initiate GitHub OAuth flow."""
-    # TODO: Implement GitHub OAuth
-    return {"message": "GitHub OAuth not implemented yet"}
+    return await _start_oauth("github", request)
+
+
+async def _exchange_code(provider: str, code: str, redirect_uri: str) -> dict:
+    """Exchange the authorization code for access tokens."""
+    client_id, client_secret = _oauth_credentials(provider)
+    async with httpx.AsyncClient(timeout=20) as client:
+        if provider == "google":
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+        else:
+            resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                },
+            )
+    if resp.status_code != 200:
+        logger.warning("OAuth token exchange failed for %s: HTTP %s", provider, resp.status_code)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"OAuth token exchange failed ({provider})",
+        )
+    data = resp.json()
+    if not data.get("access_token"):
+        logger.warning("OAuth token exchange missing access_token for %s", provider)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"OAuth token exchange failed ({provider})",
+        )
+    return data
+
+
+async def _fetch_profile(provider: str, access_token: str) -> dict:
+    """Fetch the provider's profile for the authenticated user."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        if provider == "google":
+            resp = await client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo", headers=headers
+            )
+        else:
+            resp = await client.get("https://api.github.com/user", headers=headers)
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Could not fetch {provider} profile",
+            )
+        profile = resp.json()
+        if provider == "github":
+            # GitHub only returns an email if it is public; fall back to the
+            # verified primary email from the /user/emails endpoint.
+            if not profile.get("email"):
+                email_resp = await client.get(
+                    "https://api.github.com/user/emails", headers=headers
+                )
+                if email_resp.status_code == 200:
+                    for entry in email_resp.json():
+                        if entry.get("primary") and entry.get("verified"):
+                            profile["email"] = entry.get("email")
+                            break
+    return profile
+
+
+async def _unique_username(db: AsyncSession, base: str) -> str:
+    """Generate a unique username from a base string."""
+    username = re.sub(r"[^a-zA-Z0-9_-]", "", base) or "user"
+    username = username[:40] or "user"
+    if username[0].isdigit():
+        username = f"u_{username}"
+    while True:
+        if not await db.scalar(select(User.id).where(User.username == username)):
+            return username
+        username = f"{username[:36]}{uuid.uuid4().hex[:4]}"
+
+
+async def _find_or_create_oauth_user(
+    db: AsyncSession,
+    provider: str,
+    profile: dict,
+    token_info: dict,
+) -> User:
+    """Find or create a user linked to an OAuth provider account."""
+    provider_user_id = str(profile.get("sub") or profile.get("id") or "").strip()
+    if not provider_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provider did not return a user id ({provider})",
+        )
+
+    email = (profile.get("email") or "").strip().lower() or None
+    name = profile.get("name")
+    if not name and provider == "github":
+        name = profile.get("login")
+    avatar_url = profile.get("picture") or profile.get("avatar_url")
+
+    now = datetime.utcnow()
+    expires_in = token_info.get("expires_in")
+
+    def _make_oauth_record(user_id) -> OAuthAccount:
+        return OAuthAccount(
+            user_id=user_id,
+            provider=provider,
+            provider_user_id=provider_user_id,
+            provider_email=email,
+            access_token=token_info.get("access_token"),
+            refresh_token=token_info.get("refresh_token"),
+            token_expires_at=now + timedelta(seconds=expires_in) if expires_in else None,
+            avatar_url=avatar_url,
+            profile=profile,
+        )
+
+    # 1) Existing OAuth link
+    result = await db.execute(
+        select(OAuthAccount).where(
+            OAuthAccount.provider == provider,
+            OAuthAccount.provider_user_id == provider_user_id,
+        )
+    )
+    oauth = result.scalar_one_or_none()
+    if oauth:
+        user = await db.get(User, oauth.user_id)
+        if user is None or not user.is_active or user.status != UserStatus.ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account is inactive or suspended",
+            )
+        oauth.access_token = token_info.get("access_token")
+        oauth.refresh_token = token_info.get("refresh_token")
+        if expires_in:
+            oauth.token_expires_at = now + timedelta(seconds=expires_in)
+        oauth.avatar_url = avatar_url
+        oauth.profile = profile
+        await db.commit()
+        return user
+
+    # 2) Existing user with the same email -> link the provider account
+    user = None
+    if email:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+    if user is not None:
+        db.add(_make_oauth_record(user.id))
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+        return user
+
+    # 3) Create a new user with a personal workspace
+    username = await _unique_username(db, email.split("@")[0] if email else provider_user_id)
+    user = User(
+        email=email or f"{provider_user_id}@{provider}.nova.local",
+        username=username,
+        full_name=name,
+        avatar_url=avatar_url,
+        auth_provider=AuthProvider(provider),
+        email_verified=True,
+        email_verified_at=now,
+        is_active=True,
+        status=UserStatus.ACTIVE,
+    )
+    db.add(user)
+    await db.flush()
+
+    org = Organization(
+        name=f"{username}'s Workspace",
+        slug=f"{username}-workspace",
+        description=f"Personal workspace for {username}",
+        owner_id=user.id,
+    )
+    db.add(org)
+    await db.flush()
+
+    db.add(
+        OrganizationMember(
+            organization_id=org.id,
+            user_id=user.id,
+            role=OrganizationRole.OWNER,
+            status="active",
+        )
+    )
+    db.add(_make_oauth_record(user.id))
+    await db.commit()
+    logger.info("Created user %s via %s OAuth", user.email, provider)
+    return user
 
 
 @router.get("/oauth/callback/{provider}", summary="OAuth callback")
 async def oauth_callback(
     provider: str,
-    code: str,
+    request: Request,
+    code: Optional[str] = None,
     state: Optional[str] = None,
+    error: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Handle OAuth callback."""
-    # TODO: Implement OAuth callback
-    return {"message": f"{provider} OAuth callback not implemented yet"}
+    """Handle OAuth callback from the provider."""
+    frontend_url = settings.FRONTEND_URL
+    fail_redirect = f"{frontend_url}/?oauth_error=oauth_failed"
+
+    if provider not in ("google", "github"):
+        return RedirectResponse(
+            f"{frontend_url}/?oauth_error=unsupported_provider",
+            status_code=status.HTTP_302_FOUND,
+        )
+    if error:
+        return RedirectResponse(
+            f"{frontend_url}/?oauth_error=provider_denied",
+            status_code=status.HTTP_302_FOUND,
+        )
+    if not code:
+        return RedirectResponse(
+            f"{frontend_url}/?oauth_error=missing_code",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    expected_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if not expected_state or not state or not secrets.compare_digest(state, expected_state):
+        return RedirectResponse(
+            f"{frontend_url}/?oauth_error=invalid_state",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    try:
+        token_info = await _exchange_code(provider, code, _oauth_redirect_uri(provider))
+        profile = await _fetch_profile(provider, token_info["access_token"])
+        user = await _find_or_create_oauth_user(db, provider, profile, token_info)
+    except HTTPException as exc:
+        logger.warning("OAuth callback error for %s: %s", provider, exc.detail)
+        return RedirectResponse(fail_redirect)
+    except Exception:  # noqa: BLE001
+        logger.exception("Unexpected OAuth callback error for %s", provider)
+        return RedirectResponse(fail_redirect)
+
+    # Get the user's first active organization
+    result = await db.execute(
+        select(OrganizationMember.organization_id).where(
+            OrganizationMember.user_id == user.id,
+            OrganizationMember.status == "active",
+        )
+    )
+    org_id = result.scalars().first()
+
+    token_pair = create_token_pair(user, org_id)
+
+    redirect = RedirectResponse(
+        f"{frontend_url}/auth/callback",
+        status_code=status.HTTP_302_FOUND,
+    )
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    redirect.set_cookie(
+        key="refresh_token",
+        value=token_pair.refresh_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+    return redirect
 
 
 # Import datetime at the end to avoid circular imports

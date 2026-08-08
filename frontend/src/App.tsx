@@ -3,6 +3,7 @@ import LoginPage from './components/LoginPage';
 import ChatPage from './components/ChatPage';
 import ResetPasswordPage from './components/ResetPasswordPage';
 import SharePage from './components/SharePage';
+import AuthCallbackPage from './components/AuthCallbackPage';
 
 function Root() {
   const { user, loading } = useAuth();
@@ -14,6 +15,10 @@ function Root() {
   if (window.location.pathname.startsWith('/share/')) {
     const token = window.location.pathname.slice('/share/'.length).split('/')[0];
     return <SharePage token={token} />;
+  }
+
+  if (window.location.pathname.startsWith('/auth/callback')) {
+    return <AuthCallbackPage />;
   }
 
   if (loading) {

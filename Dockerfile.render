@@ -1,0 +1,46 @@
+# Render single-container build: frontend (nginx) + backend (uvicorn) on one origin.
+# Keeps the refresh-token cookie same-origin and matches the local docker-compose layout.
+
+# ---- Stage 1: build frontend ----
+FROM node:22-alpine AS frontend-build
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: runtime (Python + nginx) ----
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    nginx \
+    gettext-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# Backend app
+COPY backend/pyproject.toml backend/README.md ./
+COPY backend/app ./app
+COPY backend/migrations ./migrations
+COPY backend/alembic.ini ./
+
+RUN pip install --upgrade pip && pip install .
+
+# Frontend static build
+COPY --from=frontend-build /fe/dist /usr/share/nginx/html
+
+# Nginx config (envsubst template) + entrypoint
+COPY docker/render/nginx.conf.template /etc/nginx/conf.d/default.conf.template
+COPY docker/render/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+CMD ["/entrypoint.sh"]

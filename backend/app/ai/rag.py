@@ -7,7 +7,7 @@ import hashlib
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from app.ai.providers import embedding_provider
+from app.ai.providers import embedding_dimension, embedding_provider
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.qdrant import delete_points, ensure_collection, scroll_points, search_points, upsert_points
@@ -56,8 +56,8 @@ def chunk_text(
     return chunks
 
 
-async def _ensure_chunks_collection(dimension: int = settings.EMBEDDING_DIMENSION) -> None:
-    await ensure_collection(CHUNKS_COLLECTION, dimension=dimension)
+async def _ensure_chunks_collection(dimension: Optional[int] = None) -> None:
+    await ensure_collection(CHUNKS_COLLECTION, dimension=dimension or embedding_dimension())
 
 
 async def embed_texts(texts: List[str]) -> List[List[float]]:

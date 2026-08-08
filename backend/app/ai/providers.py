@@ -240,7 +240,7 @@ class GeminiProvider(ChatProvider):
 
 
 class GroqProvider(OpenAIProvider):
-    """Groq is OpenAI-compatible; chat only (no embeddings)."""
+    """Groq is OpenAI-compatible: chat, embeddings and transcription."""
 
     name = "groq"
 
@@ -250,9 +250,7 @@ class GroqProvider(OpenAIProvider):
             base_url=base_url or settings.GROQ_BASE_URL,
         )
         self.default_model = settings.GROQ_MODEL
-
-    async def embed(self, texts, model=None):
-        raise ProviderError("Groq does not support embeddings")
+        self.embedding_model = settings.GROQ_EMBEDDING_MODEL
 
     async def transcribe(self, audio_bytes, **kwargs):
         if not self.api_key:
@@ -585,11 +583,22 @@ def default_provider() -> ChatProvider:
 
 
 def embedding_provider() -> ChatProvider:
-    """Choose the provider used for embeddings (Groq has none)."""
+    """Choose the provider used for embeddings."""
     if settings.GEMINI_API_KEY:
         return GeminiProvider()
     if settings.OPENAI_API_KEY:
         return OpenAIProvider()
     if settings.OPENROUTER_API_KEY:
         return OpenRouterProvider()
+    if settings.GROQ_API_KEY:
+        return GroqProvider()
     return default_provider()
+
+
+def embedding_dimension() -> int:
+    """Return the embedding vector dimension for the active provider."""
+    if settings.GROQ_API_KEY and not any(
+        (settings.GEMINI_API_KEY, settings.OPENAI_API_KEY, settings.OPENROUTER_API_KEY)
+    ):
+        return settings.GROQ_EMBEDDING_DIMENSION
+    return settings.EMBEDDING_DIMENSION

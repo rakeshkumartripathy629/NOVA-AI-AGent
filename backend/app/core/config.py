@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
+    GROQ_EMBEDDING_MODEL: str = "nomic-embed-text-v1.5"
+    GROQ_EMBEDDING_DIMENSION: int = 768
     
     # Embedding Models
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -283,6 +285,14 @@ class Settings(BaseSettings):
     def parse_cors_origins(cls, v: str | List[str]) -> List[str]:
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
+        return v
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        """Add the asyncpg driver so plain postgres:// URLs (e.g. Render) work."""
+        if v.startswith("postgresql://") and "+asyncpg" not in v:
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
     
     @field_validator("ALLOWED_FILE_TYPES", mode="before")

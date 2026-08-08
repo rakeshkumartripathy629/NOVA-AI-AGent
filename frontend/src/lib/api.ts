@@ -23,6 +23,36 @@ export function setToken(token: string | null): void {
   }
 }
 
+let refreshPromise: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        if (!resp.ok) {
+          setToken(null);
+          return null;
+        }
+        const data = (await resp.json()) as { access_token?: string };
+        const token = data.access_token ?? null;
+        setToken(token);
+        return token;
+      } catch {
+        setToken(null);
+        return null;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+  }
+  return refreshPromise;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -36,7 +66,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const doFetch = (): Promise<Response> =>
+    fetch(`${API_BASE}${path}`, { ...options, headers });
+
+  let resp = await doFetch();
+  if (resp.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      headers.Authorization = `Bearer ${newToken}`;
+      resp = await doFetch();
+    }
+  }
   if (!resp.ok) {
     let message = `Request failed (${resp.status})`;
     let details = '';
@@ -105,8 +145,14 @@ export async function fetchMe(): Promise<User> {
   return request<User>('/auth/me');
 }
 
-export function logout(): void {
-  setToken(null);
+export async function logout(): Promise<void> {
+  try {
+    await request<void>('/auth/logout', { method: 'POST' });
+  } catch {
+    /* ignore — local token cleared below regardless */
+  } finally {
+    setToken(null);
+  }
 }
 
 // ---- Conversations ----
@@ -143,6 +189,16 @@ export async function updateMessage(
   });
 }
 
+export async function createMessage(
+  conversationId: string,
+  input: { role: string; content: string; type?: string },
+): Promise<Message> {
+  return request<Message>(`/messages/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ role: input.role, content: input.content, type: input.type ?? 'text' }),
+  });
+}
+
 export async function deleteMessage(conversationId: string, messageId: string): Promise<void> {
   return request<void>(`/messages/conversations/${conversationId}/messages/${messageId}`, {
     method: 'DELETE',
@@ -168,6 +224,8 @@ export async function streamChat(
   knowledgeBaseIds?: string[],
   useWebSearch = false,
   agentId?: string,
+  model?: string,
+  providerName?: string,
 ): Promise<void> {
   const token = getToken();
   const body: Record<string, unknown> = { content, stream: true };
@@ -180,16 +238,31 @@ export async function streamChat(
   if (agentId) {
     body.agent_id = agentId;
   }
-  const resp = await fetch(`${API_BASE}/messages/conversations/${conversationId}/messages/stream`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  if (model) {
+    body.model = model;
+  }
+  if (providerName) {
+    body.provider_name = providerName;
+  }
+  const doStream = (authToken: string | null): Promise<Response> =>
+    fetch(`${API_BASE}/messages/conversations/${conversationId}/messages/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+  let resp = await doStream(token);
+  if (resp.status === 401) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      resp = await doStream(newToken);
+    }
+  }
   if (!resp.ok || !resp.body) {
     throw new ApiError(resp.status, `Stream failed (${resp.status})`);
   }
@@ -359,6 +432,278 @@ export async function transcribeVoice(file: File): Promise<string> {
   return data.text ?? '';
 }
 
+export async function synthesizeVoice(text: string): Promise<Blob> {
+  const form = new FormData();
+  form.append('text', text);
+  const token = getToken();
+  const resp = await fetch(`${API_BASE}/voice/synthesize`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!resp.ok) {
+    let message = `TTS failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      message = body.detail ?? message;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(resp.status, message);
+  }
+  const data = (await resp.json()) as { audio_base64: string };
+  const bin = atob(data.audio_base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: 'audio/mpeg' });
+}
+
+export async function analyzeImage(file: File, prompt?: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', file);
+  if (prompt) form.append('prompt', prompt);
+  const token = getToken();
+  const resp = await fetch(`${API_BASE}/vision/analyze`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!resp.ok) {
+    let message = `Vision failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      message = body.detail ?? message;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(resp.status, message);
+  }
+  const data = (await resp.json()) as { description: string };
+  return data.description ?? '';
+}
+
+// ---- Conversation helpers (pin / folder / summary / share) ----
+
+export async function updateConversation(
+  id: string,
+  patch: {
+    title?: string;
+    is_archived?: boolean;
+    is_pinned?: boolean;
+    folder?: string | null;
+  },
+): Promise<Conversation> {
+  return request<Conversation>(`/conversations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function suggestFollowups(conversationId: string): Promise<string[]> {
+  const resp = await request<{ suggestions: string[] }>(
+    `/messages/conversations/${conversationId}/followups`,
+    { method: 'POST' },
+  );
+  return resp.suggestions ?? [];
+}
+
+export async function summarizeConversation(conversationId: string): Promise<string> {
+  const resp = await request<{ summary: string }>(
+    `/conversations/${conversationId}/summarize`,
+    { method: 'POST' },
+  );
+  return resp.summary ?? '';
+}
+
+export async function shareConversation(
+  conversationId: string,
+): Promise<{ url: string; token: string }> {
+  return request<{ url: string; token: string }>(
+    `/conversations/${conversationId}/share`,
+    { method: 'POST' },
+  );
+}
+
+export interface PublicSharedMessage {
+  id: string;
+  role: string;
+  content: string;
+  model?: string | null;
+  created_at?: string | null;
+}
+
+export interface PublicShareData {
+  title: string;
+  messages: PublicSharedMessage[];
+}
+
+export async function getSharedConversation(
+  token: string,
+): Promise<PublicShareData> {
+  const resp = await fetch(`${API_BASE}/conversations/public/${encodeURIComponent(token)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, `Shared conversation not found (${resp.status})`);
+  }
+  return (await resp.json()) as PublicShareData;
+}
+
+// ---- Notifications ----
+
+export interface Notification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  status: string;
+  priority: number;
+  reference_type?: string | null;
+  reference_id?: string | null;
+  action_url?: string | null;
+  action_label?: string | null;
+  read_at?: string | null;
+  created_at: string;
+}
+
+export async function listNotifications(): Promise<Notification[]> {
+  const resp = await request<{ notifications: Notification[] }>('/notifications');
+  return resp.notifications ?? [];
+}
+
+export async function unreadCount(): Promise<number> {
+  const resp = await request<{ count: number }>('/notifications/unread-count');
+  return resp.count ?? 0;
+}
+
+export async function markNotificationRead(id: string): Promise<Notification> {
+  return request<Notification>(`/notifications/${id}/read`, { method: 'PATCH' });
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  await request<unknown>('/notifications/read-all', { method: 'POST' });
+}
+
+// ---- API keys ----
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  status: string;
+  scopes: string[];
+  expires_at?: string | null;
+  last_used_at?: string | null;
+  usage_count: number;
+  created_at: string;
+}
+
+export async function listApiKeys(): Promise<ApiKey[]> {
+  const resp = await request<{ api_keys: ApiKey[] }>('/api-keys');
+  return resp.api_keys ?? [];
+}
+
+export async function createApiKey(
+  name: string,
+  scopes?: string[],
+): Promise<ApiKey & { key?: string }> {
+  return request<ApiKey & { key?: string }>('/api-keys', {
+    method: 'POST',
+    body: JSON.stringify({ name, scopes: scopes ?? ['chat'] }),
+  });
+}
+
+export async function deleteApiKey(keyId: string): Promise<void> {
+  await request<unknown>(`/api-keys/${keyId}`, { method: 'DELETE' });
+}
+
+// ---- Webhooks ----
+
+export interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  is_active: boolean;
+  retry_count: number;
+  timeout_seconds: number;
+  last_triggered_at?: string | null;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  failure_count: number;
+  created_at: string;
+}
+
+export async function listWebhooks(): Promise<Webhook[]> {
+  const resp = await request<{ webhooks: Webhook[] }>('/webhooks');
+  return resp.webhooks ?? [];
+}
+
+export async function createWebhook(input: {
+  name: string;
+  url: string;
+  events?: string[];
+}): Promise<Webhook & { secret?: string }> {
+  return request<Webhook & { secret?: string }>('/webhooks', {
+    method: 'POST',
+    body: JSON.stringify({ ...input, events: input.events ?? [] }),
+  });
+}
+
+export async function deleteWebhook(id: string): Promise<void> {
+  await request<unknown>(`/webhooks/${id}`, { method: 'DELETE' });
+}
+
+export async function testWebhook(id: string): Promise<unknown> {
+  return request<unknown>(`/webhooks/${id}/test`, { method: 'POST' });
+}
+
+// ---- Workflows ----
+
+export interface Workflow {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  definition: Record<string, unknown>;
+  trigger_type: string;
+  status: string;
+  execution_count: number;
+  success_count: number;
+  error_count: number;
+  last_executed_at?: string | null;
+  created_at: string;
+}
+
+export async function listWorkflows(): Promise<Workflow[]> {
+  const resp = await request<{ workflows: Workflow[] }>('/workflows');
+  return resp.workflows ?? [];
+}
+
+export async function createWorkflow(
+  name: string,
+  description?: string,
+): Promise<Workflow> {
+  return request<Workflow>('/workflows', {
+    method: 'POST',
+    body: JSON.stringify({ name, description, definition: {} }),
+  });
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  await request<unknown>(`/workflows/${id}`, { method: 'DELETE' });
+}
+
+export async function runWorkflow(
+  id: string,
+  input: Record<string, unknown> = {},
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>(`/workflows/${id}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  });
+}
+
 // ---- Knowledge bases & files ----
 
 export async function listKnowledgeBases(): Promise<KnowledgeBaseListResponse> {
@@ -523,6 +868,7 @@ export interface User {
   username?: string;
   full_name?: string;
   role?: string;
+  is_superuser?: boolean;
 }
 
 export interface Organization {
@@ -535,6 +881,10 @@ export interface Conversation {
   id: string;
   title: string;
   is_private: boolean;
+  is_archived?: boolean;
+  is_pinned?: boolean;
+  summary?: string | null;
+  settings?: Record<string, unknown>;
   last_message_at?: string;
   message_count?: number;
   created_at: string;
@@ -640,4 +990,77 @@ export interface UsageItem {
   type: string;
   total_quantity: number;
   total_cost: number;
+}
+
+// ---- Admin ----
+
+export interface AdminStats {
+  total_users: number;
+  total_organizations: number;
+  total_files: number;
+  total_files_size: number;
+  total_subscriptions: number;
+  active_subscriptions: number;
+  total_invoices: number;
+  revenue: number;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  username?: string | null;
+  full_name?: string | null;
+  role: string;
+  status: string;
+  created_at: string;
+}
+
+export interface AdminOrg {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: string;
+  owner_id?: string | null;
+  created_at: string;
+}
+
+export interface AdminAuditLog {
+  id: string;
+  action: string;
+  resource_type: string;
+  organization_id?: string | null;
+  user_id?: string | null;
+  created_at?: string | null;
+}
+
+export async function adminStats(): Promise<AdminStats> {
+  return request<AdminStats>('/admin/stats');
+}
+
+export async function adminUsers(search?: string): Promise<AdminUser[]> {
+  const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+  return request<AdminUser[]>(`/admin/users${qs}`);
+}
+
+export async function adminOrganizations(search?: string): Promise<AdminOrg[]> {
+  const qs = search ? `?search=${encodeURIComponent(search)}` : '';
+  return request<AdminOrg[]>(`/admin/organizations${qs}`);
+}
+
+export async function adminAuditLogs(): Promise<{
+  logs: AdminAuditLog[];
+  total: number;
+}> {
+  return request<{ logs: AdminAuditLog[]; total: number }>('/admin/audit-logs');
+}
+
+// ---- GDPR ----
+
+export async function exportMyData(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/users/me/export', { method: 'POST' });
+}
+
+export async function deleteMyAccount(): Promise<void> {
+  await request<unknown>('/users/me', { method: 'DELETE' });
 }

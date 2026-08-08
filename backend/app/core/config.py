@@ -108,7 +108,8 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: Optional[str] = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
     
     # Embedding Models
     EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -208,11 +209,12 @@ class Settings(BaseSettings):
     # Voice (Speech-to-Text / Text-to-Speech)
     STT_PROVIDER: str = "openai"  # openai, whisper-local
     STT_MODEL: str = "whisper-1"
-    TTS_PROVIDER: str = "openai"  # openai, elevenlabs, edge
+    TTS_PROVIDER: str = "edge"  # openai, elevenlabs, edge
     TTS_MODEL: str = "tts-1"
     TTS_VOICE: str = "alloy"
     ELEVENLABS_API_KEY: Optional[str] = None
     ELEVENLABS_VOICE_ID: str = "21m00Tcm4TlvDq8ikWAM"
+    TTS_EDGE_VOICE: str = "en-US-JennyNeural"
     
     # Browser automation (Playwright)
     BROWSER_HEADLESS: bool = True

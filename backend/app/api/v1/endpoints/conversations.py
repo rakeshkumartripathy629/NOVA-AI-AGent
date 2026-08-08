@@ -1,10 +1,12 @@
 """
 Conversation management endpoints.
 """
+import json
+import secrets
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +17,7 @@ from app.core.dependencies import get_current_organization
 from app.db.session import get_db
 from app.models.user import User
 from app.models.conversation import Conversation, ConversationMember, ConversationRole
+from app.models.message import Message
 from app.models.organization import Organization
 from app.models.project import ProjectMember
 
@@ -36,6 +39,8 @@ class ConversationUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     is_private: Optional[bool] = None
     is_archived: Optional[bool] = None
+    is_pinned: Optional[bool] = None
+    folder: Optional[str] = None
     settings: Optional[dict] = None
 
 
@@ -47,6 +52,8 @@ class ConversationResponse(BaseModel):
     owner_id: UUID
     is_private: bool
     is_archived: bool
+    is_pinned: bool = False
+    summary: Optional[str] = None
     settings: dict
     message_count: int
     last_message_at: Optional[datetime]
@@ -286,7 +293,16 @@ async def update_conversation(
         )
     
     update_data = conversation_data.model_dump(exclude_unset=True)
-    
+
+    if "folder" in update_data:
+        folder = update_data.pop("folder")
+        settings = dict(conversation.settings or {})
+        if folder:
+            settings["folder"] = folder
+        elif "folder" in settings:
+            del settings["folder"]
+        conversation.settings = settings
+
     for field, value in update_data.items():
         setattr(conversation, field, value)
     
@@ -561,3 +577,119 @@ async def remove_conversation_member(
 
 # Import datetime at the end
 from datetime import datetime
+
+
+class SummarizeResponse(BaseModel):
+    """Conversation summary result."""
+    summary: str
+
+
+@router.post("/{conversation_id}/summarize", response_model=SummarizeResponse, summary="Summarize conversation")
+async def summarize_conversation(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate and store a summary of the conversation using the LLM."""
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    rows = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at)
+    )
+    messages = rows.scalars().all()
+    if not messages:
+        return SummarizeResponse(summary="No messages to summarize yet.")
+
+    transcript = "\n".join(
+        f"{m.role.upper()}: {m.content[:2000]}" for m in messages if m.content
+    )[:30000]
+
+    from app.ai.providers import default_provider
+
+    collected: List[str] = []
+    try:
+        async for event in default_provider().stream(
+            messages=[{"role": "user", "content": transcript}],
+            temperature=0.3,
+            max_tokens=400,
+            system_prompt=(
+                "Summarize the following conversation into clear bullet points (about 150 words max). "
+                "Cover the main topic, key points, decisions, and action items."
+            ),
+        ):
+            if event.get("type") == "content":
+                collected.append(event.get("content", ""))
+    except Exception:  # noqa: BLE001
+        return SummarizeResponse(summary="Summary generation failed.")
+
+    summary = "".join(collected).strip() or "Summary unavailable."
+    conversation.summary = summary
+    await db.commit()
+    return SummarizeResponse(summary=summary)
+
+
+class ShareResponse(BaseModel):
+    """Share link response."""
+    url: str
+    token: str
+
+
+@router.post("/{conversation_id}/share", response_model=ShareResponse, summary="Create a public share link")
+async def share_conversation(
+    conversation_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a read-only public share link for the conversation."""
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    settings = dict(conversation.settings or {})
+    token = secrets.token_urlsafe(24)
+    settings["share_token"] = token
+    conversation.settings = settings
+    await db.commit()
+    base = str(request.base_url).rstrip("/")
+    return ShareResponse(url=f"{base}/share/{token}", token=token)
+
+
+class PublicShareResponse(BaseModel):
+    """Public shared conversation payload."""
+    title: str
+    messages: List[dict]
+
+
+@router.get("/public/{token}", response_model=PublicShareResponse, summary="Get a shared conversation (no auth)")
+async def get_shared_conversation(token: str, db: AsyncSession = Depends(get_db)):
+    """Public read-only view of a shared conversation (no authentication required)."""
+    result = await db.execute(select(Conversation))
+    conversations = result.scalars().all()
+    conversation = next(
+        (c for c in conversations if (c.settings or {}).get("share_token") == token),
+        None,
+    )
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shared conversation not found")
+
+    rows = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation.id)
+        .order_by(Message.created_at)
+    )
+    messages = rows.scalars().all()
+    return PublicShareResponse(
+        title=conversation.title or "Shared conversation",
+        messages=[{"role": m.role, "content": m.content} for m in messages if m.content],
+    )

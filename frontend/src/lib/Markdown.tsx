@@ -1,5 +1,62 @@
 import { Fragment, type ReactNode } from "react";
 
+const KEYWORDS =
+  /\b(function|return|const|let|var|if|else|for|while|import|from|export|def|class|async|await|try|catch|finally|throw|new|null|undefined|true|false|None|True|False|self|with|as|lambda|yield|print|raise|elif|not|and|or|in|is|type|interface|extends|implements|public|private|protected|static|void|int|float|str|bool|dict|list|tuple|set|select|from|where|join|group|by|order|insert|update|delete|create|table)\b/;
+
+function highlightCode(src: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const combined =
+    /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|#[^\n]*|<!--[\s\S]*?-->)|("[^"\n]*"|'[^'\n]*'|`[^`\n]*`)|(\b\d+(?:\.\d+)?\b)|(`[^`\n]*`)|\b([A-Za-z_][A-Za-z0-9_]*)\b|([^\sA-Za-z0-9_'"`#/]+)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = combined.exec(src)) !== null) {
+    if (m.index > last) {
+      out.push(<Fragment key={`c${i}`}>{src.slice(last, m.index)}</Fragment>);
+      i += 1;
+    }
+    if (m[1] !== undefined) {
+      out.push(<span key={`c${i}`} className="tok-comment">{m[1]}</span>);
+    } else if (m[2] !== undefined) {
+      out.push(<span key={`c${i}`} className="tok-string">{m[2]}</span>);
+    } else if (m[3] !== undefined) {
+      out.push(<span key={`c${i}`} className="tok-number">{m[3]}</span>);
+    } else if (m[4] !== undefined) {
+      out.push(<span key={`c${i}`} className="tok-string">{m[4]}</span>);
+    } else if (m[5] !== undefined) {
+      const word = m[5];
+      if (KEYWORDS.test(word)) {
+        out.push(<span key={`c${i}`} className="tok-keyword">{word}</span>);
+      } else {
+        out.push(<Fragment key={`c${i}`}>{word}</Fragment>);
+      }
+    } else if (m[6] !== undefined) {
+      out.push(<span key={`c${i}`} className="tok-punct">{m[6]}</span>);
+    }
+    i += 1;
+    last = combined.lastIndex;
+  }
+  if (last < src.length) {
+    out.push(<Fragment key={`c${i}`}>{src.slice(last)}</Fragment>);
+  }
+  return out;
+}
+
+function copyText(text: string): void {
+  if (navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
+
 function safeUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url, window.location.origin);
@@ -19,7 +76,7 @@ function safeUrl(url: string): string | undefined {
 function parseInline(src: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern =
-    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
+    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)\s]+)\))|(\bhttps?:\/\/[^\s<>"'`\[\]]+)|(\bwww\.[^\s<>"'`\[\]]+)/g;
   let last = 0;
   let i = 0;
   let m: RegExpExecArray | null;
@@ -51,6 +108,32 @@ function parseInline(src: string, keyPrefix: string): ReactNode[] {
           {m[8]}
         </a>,
       );
+    } else if (m[10] !== undefined) {
+      const href = safeUrl(m[10].replace(/[),.;]+$/, ""));
+      if (href) {
+        nodes.push(
+          <a key={`${keyPrefix}-u${i}`} href={href} target="_blank" rel="noreferrer">
+            {m[10]}
+          </a>,
+        );
+      } else {
+        nodes.push(
+          <Fragment key={`${keyPrefix}-u${i}`}>{m[10]}</Fragment>,
+        );
+      }
+    } else if (m[11] !== undefined) {
+      const href = safeUrl(`https://${m[11]}`);
+      if (href) {
+        nodes.push(
+          <a key={`${keyPrefix}-w${i}`} href={href} target="_blank" rel="noreferrer">
+            {m[11]}
+          </a>,
+        );
+      } else {
+        nodes.push(
+          <Fragment key={`${keyPrefix}-w${i}`}>{m[11]}</Fragment>,
+        );
+      }
     }
     i += 1;
     last = pattern.lastIndex;
@@ -91,6 +174,7 @@ function parseBlocks(src: string): ReactNode[] {
 
     const fenceMatch = line.match(/^```(\w*)\s*$/);
     if (fenceMatch) {
+      const lang = fenceMatch[1] || "";
       const buf: string[] = [];
       i += 1;
       while (i < lines.length && !/^```\s*$/.test(lines[i])) {
@@ -99,9 +183,24 @@ function parseBlocks(src: string): ReactNode[] {
       }
       i += 1;
       out.push(
-        <pre key={key++} className="code-block">
-          <code>{buf.join("\n")}</code>
-        </pre>,
+        <div className="code-block-wrap" key={key++}>
+          <div className="code-block-head">
+            <span className="code-block-lang">{lang || "text"}</span>
+            <button
+              className="code-copy-btn"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                copyText(buf.join("\n"));
+              }}
+            >
+              Copy
+            </button>
+          </div>
+          <pre className="code-block">
+            <code>{highlightCode(buf.join("\n"))}</code>
+          </pre>
+        </div>,
       );
       continue;
     }

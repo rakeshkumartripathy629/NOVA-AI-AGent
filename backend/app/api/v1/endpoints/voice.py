@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
-from app.ai.providers import ElevenLabsTTS, ProviderError, get_provider
+from app.ai.providers import EdgeTTSTTS, ElevenLabsTTS, ProviderError, get_provider
 from app.core.config import settings
 from app.core.security import get_current_active_user
 from app.models.user import User
@@ -51,8 +51,9 @@ async def transcribe(
 
 @router.post("/synthesize", summary="Synthesize speech from text")
 async def synthesize(
-    text: str = Form(..., min_length=1, max_length=4000),
+    text: str = Form(..., min_length=1, max_length=100000),
     voice: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     format: str = Form("mp3"),
     current_user: User = Depends(get_current_active_user),
@@ -61,14 +62,17 @@ async def synthesize(
     if not settings.FEATURE_VOICE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Voice features are disabled")
 
-    if settings.TTS_PROVIDER == "elevenlabs":
+    if settings.TTS_PROVIDER == "edge":
+        provider = EdgeTTSTTS()
+    elif settings.TTS_PROVIDER == "elevenlabs":
         provider = ElevenLabsTTS()
     else:
         provider = get_provider(settings.TTS_PROVIDER)
     try:
         audio = await provider.synthesize(
             text,
-            voice=voice or settings.TTS_VOICE,
+            voice=voice,
+            language=language,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))

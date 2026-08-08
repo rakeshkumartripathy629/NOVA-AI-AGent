@@ -107,7 +107,14 @@ async def stream_chat_response(
 
     # RAG context
     citations: List[Dict[str, Any]] = []
-    base_system_prompt = system_prompt or "You are a helpful assistant."
+    base_system_prompt = (
+        system_prompt
+        or "You are a helpful assistant. Be concise: answer exactly what the user asked "
+        "in short, clear sentences. Prefer a one-line answer or a brief bullet list. "
+        "Never add filler, repetition, greetings, or unnecessary details. "
+        "Keep answers under ~100 words unless the user explicitly asks for a long or "
+        "detailed explanation."
+    )
     if knowledge_base_ids:
         retrieved = await _retrieve_context(conversation.id, knowledge_base_ids, user_message_content)
         if retrieved:

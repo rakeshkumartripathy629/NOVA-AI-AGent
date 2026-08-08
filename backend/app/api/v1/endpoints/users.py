@@ -15,6 +15,8 @@ from app.core.security import get_current_active_user, get_current_superuser, re
 from app.db.session import get_db
 from app.models.user import User, UserRole, UserStatus
 from app.models.organization import OrganizationMember
+from app.models.conversation import Conversation
+from app.models.message import Message
 
 
 router = APIRouter()
@@ -182,6 +184,111 @@ async def update_my_profile(
     await db.refresh(user)
     
     return UserResponse.model_validate(user)
+
+
+@router.post("/me/export", summary="Export my data (GDPR)")
+async def export_my_data(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export all personal data as JSON for the current user."""
+    org_result = await db.execute(
+        select(OrganizationMember)
+        .where(OrganizationMember.user_id == current_user.id)
+        .options(selectinload(OrganizationMember.organization))
+    )
+    organizations = [
+        {
+            "id": str(m.organization_id),
+            "name": m.organization.name,
+            "slug": m.organization.slug,
+            "role": m.role.value if hasattr(m.role, "value") else str(m.role),
+            "joined_at": m.joined_at.isoformat() if m.joined_at else None,
+        }
+        for m in org_result.scalars().all()
+    ]
+
+    conversations = (
+        (await db.execute(select(Conversation).where(Conversation.owner_id == current_user.id)))
+        .scalars()
+        .all()
+    )
+    conversation_list = [
+        {
+            "id": str(c.id),
+            "title": c.title,
+            "model": c.model,
+            "system_prompt": c.system_prompt,
+            "message_count": c.message_count,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+        }
+        for c in conversations
+    ]
+
+    messages = (
+        (await db.execute(select(Message).where(Message.user_id == current_user.id)))
+        .scalars()
+        .all()
+    )
+    message_list = [
+        {
+            "id": str(m.id),
+            "conversation_id": str(m.conversation_id),
+            "role": m.role.value if hasattr(m.role, "value") else str(m.role),
+            "content": m.content,
+            "model": m.model,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m in messages
+    ]
+
+    return {
+        "exported_at": datetime.utcnow().isoformat(),
+        "user": {
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "username": current_user.username,
+            "full_name": current_user.full_name,
+            "role": current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role),
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
+        },
+        "organizations": organizations,
+        "conversations": conversation_list,
+        "messages": message_list,
+    }
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT, summary="Delete my account (GDPR)")
+async def delete_my_account(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the current user's account and anonymize personal data."""
+    result = await db.execute(
+        select(User).where(User.id == current_user.id)
+    )
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    user.is_active = False
+    user.status = UserStatus.DELETED
+    user.is_deleted = True
+    user.deleted_at = datetime.utcnow()
+    user.email = f"deleted-{user.id.hex[:12]}@nova-ai.invalid"
+    user.username = f"deleted_user_{user.id.hex[:12]}"
+    user.full_name = None
+    user.avatar_url = None
+    user.bio = None
+    user.hashed_password = None
+    user.preferences = {}
+    user.two_factor_secret = None
+    await db.commit()
 
 
 @router.get("/{user_id}", response_model=UserResponse, summary="Get user by ID")

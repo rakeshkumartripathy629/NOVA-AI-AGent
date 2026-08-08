@@ -7,11 +7,35 @@ text snippets for grounding model responses.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
+from urllib.parse import parse_qs, unquote, urlparse
 
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger("ai.websearch")
+
+VIDEO_QUERY_HINTS = (
+    "video", "youtube", "watch", "tutorial", "how to", "guide", "demo",
+    "reels", "shorts", "trailer", "review video",
+)
+
+
+def _direct_url(href: str) -> str:
+    """DuckDuckGo HTML wraps links in a redirect (//duckduckgo.com/l/?uddg=...).
+    Unwrap it so citations open the real page directly in the browser."""
+    if not href:
+        return ""
+    if href.startswith("//"):
+        href = f"https:{href}"
+    try:
+        qs = parse_qs(urlparse(href).query)
+    except ValueError:
+        qs = {}
+    if qs.get("uddg"):
+        direct = unquote(qs["uddg"][0])
+        if direct.startswith(("http://", "https://")):
+            return direct
+    return href
 
 
 async def _search_duckduckgo(query: str, max_results: int) -> List[Dict[str, str]]:
@@ -36,11 +60,21 @@ async def _search_duckduckgo(query: str, max_results: int) -> List[Dict[str, str
             results.append(
                 {
                     "title": link.get_text(" ", strip=True),
-                    "url": link.get("href", ""),
+                    "url": _direct_url(link.get("href", "")),
                     "snippet": snippet.get_text(" ", strip=True) if snippet else "",
                 }
             )
     return results
+
+
+def _serpapi_video(item: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "title": item.get("title", ""),
+        "url": item.get("link") or item.get("url") or "",
+        "snippet": item.get("snippet", "") or item.get("description", ""),
+        "source": item.get("source", "") or item.get("channel", ""),
+        "type": "video",
+    }
 
 
 async def _search_serpapi(query: str, max_results: int) -> List[Dict[str, str]]:
@@ -63,15 +97,83 @@ async def _search_serpapi(query: str, max_results: int) -> List[Dict[str, str]]:
         data = resp.json()
 
     results = []
+    seen: set = set()
     for item in data.get("organic_results", [])[:max_results]:
+        url = item.get("link", "")
+        if url in seen:
+            continue
+        seen.add(url)
         results.append(
             {
                 "title": item.get("title", ""),
-                "url": item.get("link", ""),
+                "url": url,
                 "snippet": item.get("snippet", ""),
+                "type": "web",
             }
         )
+    for item in data.get("video_results", [])[:max_results]:
+        v = _serpapi_video(item)
+        if v["url"] and v["url"] not in seen:
+            seen.add(v["url"])
+            results.append(v)
+    for item in data.get("inline_videos", [])[:max_results]:
+        v = _serpapi_video(item)
+        if v["url"] and v["url"] not in seen:
+            seen.add(v["url"])
+            results.append(v)
     return results
+
+
+async def _search_duckduckgo_youtube(query: str, max_results: int) -> List[Dict[str, str]]:
+    """Search YouTube specifically via DuckDuckGo (site:youtube.com)."""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": f"site:youtube.com {query}"},
+            headers={"User-Agent": "Mozilla/5.0 NovaAI/1.0"},
+        )
+        if resp.status_code != 200:
+            return []
+
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+    results = []
+    for result in soup.select(".result")[:max_results]:
+        link = result.select_one("a.result__a")
+        snippet = result.select_one(".result__snippet")
+        if not link:
+            continue
+        url = _direct_url(link.get("href", ""))
+        if "youtube.com" in url or "youtu.be" in url:
+            results.append(
+                {
+                    "title": link.get_text(" ", strip=True),
+                    "url": url,
+                    "snippet": snippet.get_text(" ", strip=True) if snippet else "",
+                    "source": "YouTube",
+                    "type": "video",
+                }
+            )
+    return results
+
+
+def _merge_dedupe(
+    web_results: List[Dict[str, str]],
+    video_results: List[Dict[str, str]],
+    limit: int,
+) -> List[Dict[str, str]]:
+    by_url: Dict[str, Dict[str, str]] = {}
+    for r in [*video_results, *web_results]:
+        url = r.get("url", "")
+        if not url:
+            continue
+        if url not in by_url:
+            by_url[url] = r
+    return list(by_url.values())[:limit]
 
 
 async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
@@ -82,8 +184,11 @@ async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
     try:
         if engine == "duckduckgo":
             results = await _search_duckduckgo(query, max_results)
+            video_results = await _search_duckduckgo_youtube(query, max_results)
         else:  # serpapi, google, bing
             results = await _search_serpapi(query, max_results)
+            video_results = []
+        results = _merge_dedupe(results, video_results, max_results)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Web search failed: %s", exc)
         return "", []
@@ -94,14 +199,18 @@ async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
     context_lines = []
     citations: List[Dict[str, Any]] = []
     for i, r in enumerate(results, start=1):
-        context_lines.append(f"[{i}] {r['title']}\n{r['snippet']}\nURL: {r['url']}")
+        rtype = r.get("type", "web")
+        label = "Video" if rtype == "video" else "URL"
+        context_lines.append(
+            f"[{i}] ({label}) {r['title']}\n{r.get('snippet', '')}\n{r['url']}"
+        )
         citations.append(
             {
                 "index": i,
-                "type": "web",
+                "type": rtype,
                 "title": r["title"],
                 "url": r["url"],
-                "content": r["snippet"],
+                "content": r.get("snippet", ""),
             }
         )
 

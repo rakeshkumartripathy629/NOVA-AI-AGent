@@ -32,8 +32,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       if (!api.getToken()) {
-        setLoading(false);
-        return;
+        const ok = await api.refreshAccessToken();
+        if (!cancelled && !ok) {
+          setLoading(false);
+          return;
+        }
       }
       try {
         const me = await api.fetchMe();
@@ -69,7 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signOut = useCallback(() => {
-    api.logout();
+    void api.logout();
     setUser(null);
     setOrganization(null);
   }, []);

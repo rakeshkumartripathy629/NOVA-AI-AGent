@@ -7,17 +7,25 @@ import AgentsPanel from "./AgentsPanel";
 import KBManagerModal from "./KBManagerModal";
 import SearchModal from "./SearchModal";
 import ProjectsModal from "./ProjectsModal";
+import SettingsModal from "./SettingsModal";
+import AdminPanel from "./AdminPanel";
 import Markdown from "../lib/Markdown";
+import { PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, modelName } from "../lib/models";
 import {
+  BellIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
   FolderIcon,
   GlobeIcon,
+  ImageIcon,
   MicIcon,
   PaperclipIcon,
-  SearchIcon,
   SendIcon,
+  SparklesIcon,
+  SpeakerIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
 } from "../lib/icons";
 
 interface ChatMessage {
@@ -34,6 +42,14 @@ interface ChatMessage {
     status?: string;
   };
 }
+
+const STARTER_PROMPTS = [
+  "Brainstorm a launch plan for my new product",
+  "Explain how vector databases work in simple terms",
+  "Draft a professional email asking for a deadline extension",
+];
+
+const REACTION_KEY = "nova_reactions";
 
 function copyToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -60,6 +76,10 @@ function copyToClipboard(text: string): Promise<void> {
 export default function ChatPage() {
   const { user, organization, signOut } = useAuth();
   const [conversations, setConversations] = useState<api.Conversation[]>([]);
+  const conversationsRef = useRef(conversations);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -89,9 +109,49 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  const [followUps, setFollowUps] = useState<Record<string, string[]>>({});
+  const [provider, setProvider] = useState<string>(DEFAULT_PROVIDER);
+  const [model, setModel] = useState<string>(DEFAULT_MODEL);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [summary, setSummary] = useState<string>("");
+  const [summarizing, setSummarizing] = useState(false);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speakCancelledRef = useRef(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const imageFileRef = useRef<File | null>(null);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const [reactions, setReactions] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(REACTION_KEY) ?? "{}") as Record<
+        string,
+        string
+      >;
+    } catch {
+      return {};
+    }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    localStorage.getItem("nova_theme") === "light" ? "light" : "dark",
+  );
+  const [notifications, setNotifications] = useState<api.Notification[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [notifOpen, setNotifOpen] = useState(false);
+
   const ACTIVE_KEY = "nova_active_conversation";
   const CHAT_STATE_KEY = "nova_chat_state";
   const DRAFT_PREFIX = "nova_draft:";
+
+  useEffect(() => {
+    document.documentElement.classList.toggle(
+      "theme-light",
+      theme === "light",
+    );
+    localStorage.setItem("nova_theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     api.listConversations().then((res) => {
@@ -107,6 +167,7 @@ export default function ChatPage() {
     api.listAgents().then((res) => {
       setAgents(res);
     });
+    api.unreadCount().then((n) => setUnread(n)).catch(() => undefined);
     const savedState = localStorage.getItem(CHAT_STATE_KEY);
     if (savedState) {
       try {
@@ -165,9 +226,15 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeId) {
       setMessages([]);
+      setFollowUps({});
+      setSummary("");
       return;
     }
     setMessages([]);
+    setFollowUps({});
+    setSummary(
+      conversationsRef.current.find((c) => c.id === activeId)?.summary ?? "",
+    );
     api
       .listMessages(activeId)
       .then((res) => {
@@ -205,7 +272,7 @@ export default function ChatPage() {
 
   const showToast = (text: string) => {
     setToast(text);
-    setTimeout(() => setToast(""), 1600);
+    setTimeout(() => setToast(""), 1800);
   };
 
   const scrollToBottom = () => {
@@ -289,6 +356,7 @@ export default function ChatPage() {
               return next;
             });
           } else if (event.type === "done") {
+            const doneId = event.message_id;
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
@@ -296,7 +364,7 @@ export default function ChatPage() {
                 next[next.length - 1] = {
                   ...last,
                   streaming: false,
-                  id: event.message_id,
+                  id: doneId,
                 };
               }
               return next;
@@ -320,12 +388,24 @@ export default function ChatPage() {
                 );
               })
               .catch(() => undefined);
+            if (doneId) {
+              api
+                .suggestFollowups(conversationId)
+                .then((s) => {
+                  if (s.length > 0) {
+                    setFollowUps((prev) => ({ ...prev, [doneId]: s }));
+                  }
+                })
+                .catch(() => undefined);
+            }
           }
         },
         controller.signal,
         kbs,
         ws,
         agentId,
+        model,
+        provider,
       );
     } catch (err) {
       setMessages((prev) => {
@@ -348,18 +428,86 @@ export default function ChatPage() {
     }
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    const content = input.trim();
-    if (!content || busy || !activeId) return;
+  const sendText = async (text: string) => {
+    const content = text.trim();
+    if (!content || busy) return;
+    let convId = activeId;
+    if (!convId) {
+      const conv = await api.createConversation("New conversation");
+      setConversations((prev) => [conv, ...prev]);
+      setActiveId(conv.id);
+      convId = conv.id;
+    }
     setInput("");
+    setImagePreview(null);
+    imageFileRef.current = null;
     await runStream(
       content,
-      activeId,
+      convId,
       knowledgeBaseIds,
       webSearch,
       selectedAgent || undefined,
     );
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (imagePreview && imageFileRef.current) {
+      await sendVision();
+      return;
+    }
+    await sendText(input);
+  };
+
+  const sendVision = async () => {
+    const file = imageFileRef.current;
+    if (!file || !activeId || busy) return;
+    const question = input.trim() || "What is in this image?";
+    setVisionBusy(true);
+    try {
+      const answer = await api.analyzeImage(file, question);
+      const userText = `[Image: ${file.name}]\n${question}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: `local-v${Date.now()}`, role: "user", content: userText },
+        {
+          id: `local-v${Date.now() + 1}`,
+          role: "assistant",
+          content: answer,
+        },
+      ]);
+      await api.createMessage(activeId, { role: "user", content: userText });
+      await api.createMessage(activeId, { role: "assistant", content: answer });
+      api
+        .listConversations()
+        .then((res) => setConversations(res.conversations));
+      api
+        .listMessages(activeId)
+        .then((res) => {
+          setMessages(
+            res.messages.map((m) => ({
+              id: m.id,
+              role: m.role,
+              content: m.content ?? "",
+              is_edited: m.is_edited,
+              citations: Array.isArray(m.citations)
+                ? (m.citations as api.Citation[])
+                : undefined,
+            })),
+          );
+        })
+        .catch(() => undefined);
+      setInput("");
+      setImagePreview(null);
+      imageFileRef.current = null;
+      showToast("Image analyzed");
+    } catch (err) {
+      showToast(
+        "⚠ " + (err instanceof Error ? err.message : "Vision failed"),
+      );
+    } finally {
+      setVisionBusy(false);
+    }
   };
 
   const handleStop = () => abortRef.current?.abort();
@@ -424,6 +572,148 @@ export default function ChatPage() {
     setMessages((prev) => prev.slice(0, idx));
   };
 
+  const splitForSpeech = (text: string): string[] => {
+    const parts: string[] = [];
+    const segments = text.split(/(?<=[.!?\u0964\u2026])\s+|\n+/);
+    let cur = "";
+    for (const seg of segments) {
+      const s = seg.trim();
+      if (!s) continue;
+      if (cur && (cur + " " + s).length > 320) {
+        parts.push(cur);
+        cur = s;
+      } else {
+        cur = cur ? `${cur} ${s}` : s;
+      }
+    }
+    if (cur) parts.push(cur);
+    return parts.length ? parts : [text];
+  };
+
+  const stopSpeak = () => {
+    speakCancelledRef.current = true;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    setSpeakingId(null);
+  };
+
+  const handleSpeak = async (m: ChatMessage) => {
+    if (!m.content) return;
+    if (speakingId === m.id) {
+      stopSpeak();
+      return;
+    }
+    stopSpeak();
+    speakCancelledRef.current = false;
+    setSpeakingId(m.id);
+    const chunks = splitForSpeech(m.content);
+    try {
+      for (const chunk of chunks) {
+        if (speakCancelledRef.current) break;
+        const blob = await api.synthesizeVoice(chunk);
+        if (speakCancelledRef.current) break;
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        await new Promise<void>((resolve) => {
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            setSpeakingId(null);
+            resolve();
+          };
+          audio.play();
+        });
+        if (speakCancelledRef.current) break;
+      }
+    } catch (err) {
+      showToast(
+        "⚠ " + (err instanceof Error ? err.message : "Speech failed"),
+      );
+    } finally {
+      if (!speakCancelledRef.current) setSpeakingId(null);
+      speakCancelledRef.current = false;
+    }
+  };
+
+  const setReaction = (id: string, r: string) => {
+    const next = { ...reactions };
+    if (next[id] === r) delete next[id];
+    else next[id] = r;
+    setReactions(next);
+    localStorage.setItem(REACTION_KEY, JSON.stringify(next));
+  };
+
+  const handlePin = async (id: string, pinned: boolean) => {
+    try {
+      const updated = await api.updateConversation(id, { is_pinned: pinned });
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, is_pinned: updated.is_pinned } : c)),
+      );
+    } catch (err) {
+      showToast("⚠ " + (err instanceof Error ? err.message : "Pin failed"));
+    }
+  };
+
+  const handleFolder = async (id: string, folder: string | null) => {
+    try {
+      const updated = await api.updateConversation(id, { folder });
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === id ? { ...c, settings: updated.settings } : c,
+        ),
+      );
+    } catch (err) {
+      showToast("⚠ " + (err instanceof Error ? err.message : "Folder failed"));
+    }
+  };
+
+  const handleSummarize = async () => {
+    if (!activeId || messages.length === 0 || summarizing) return;
+    setSummarizing(true);
+    try {
+      const s = await api.summarizeConversation(activeId);
+      setSummary(s);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === activeId ? { ...c, summary: s } : c)),
+      );
+      showToast("Summary generated");
+    } catch (err) {
+      showToast("⚠ " + (err instanceof Error ? err.message : "Summarize failed"));
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (!activeId) return;
+    try {
+      const res = await api.shareConversation(activeId);
+      await copyToClipboard(res.url);
+      showToast("Share link copied");
+    } catch (err) {
+      showToast("⚠ " + (err instanceof Error ? err.message : "Share failed"));
+    }
+  };
+
+  const toggleNotifications = async () => {
+    const next = !notifOpen;
+    setNotifOpen(next);
+    if (next) {
+      try {
+        const items = await api.listNotifications();
+        setNotifications(items);
+        await api.markAllNotificationsRead();
+        setUnread(0);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -484,6 +774,18 @@ export default function ChatPage() {
 
   const handleAttachClick = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      showToast("Please pick an image file");
+      return;
+    }
+    imageFileRef.current = file;
+    setImagePreview(URL.createObjectURL(file));
   };
 
   const openAttachment = async (
@@ -612,6 +914,23 @@ export default function ChatPage() {
         onNew={handleNew}
         onRename={handleRename}
         onDelete={handleDeleteConv}
+        onPin={handlePin}
+        onFolder={handleFolder}
+        user={user}
+        theme={theme}
+        canExport={messages.length > 0}
+        canSummarize={!!activeId && messages.length > 0 && !summarizing}
+        summarizing={summarizing}
+        onSearch={() => setShowSearch(true)}
+        onProjects={() => setShowProjects(true)}
+        onExport={exportConversation}
+        onSummarize={handleSummarize}
+        onShare={handleShare}
+        onBilling={() => setShowBilling(true)}
+        onAdmin={() => setShowAdmin(true)}
+        onSettings={() => setShowSettings(true)}
+        onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+        onSignOut={handleSignOut}
       />
 
       <main className="chat-main">
@@ -626,41 +945,33 @@ export default function ChatPage() {
             <span className="org-name">
               {organization?.name ?? "No organization"}
             </span>
-            <button
-              className="billing-btn"
-              onClick={() => setShowSearch(true)}
-              title="Search workspace"
-            >
-              <SearchIcon />
-              Search
-            </button>
-            <button
-              className="billing-btn"
-              onClick={() => setShowProjects(true)}
-              title="Projects"
-            >
-              Projects
-            </button>
-            <button
-              className="billing-btn"
-              onClick={exportConversation}
-              disabled={messages.length === 0}
-              title="Export conversation as Markdown"
-            >
-              Export
-            </button>
-            <button
-              className="billing-btn"
-              onClick={() => setShowBilling(true)}
-            >
-              Billing
-            </button>
-            <span className="user-avatar">
-              {(user?.full_name ?? user?.email ?? "?").charAt(0).toUpperCase()}
-            </span>
-            <button className="sign-out" onClick={handleSignOut}>
-              Sign out
-            </button>
+            <div className="notif-wrap">
+              <button
+                className={`billing-btn${notifOpen ? " active" : ""}`}
+                onClick={toggleNotifications}
+                title="Notifications"
+              >
+                <BellIcon />
+                {unread > 0 && <span className="notif-badge">{unread}</span>}
+              </button>
+              {notifOpen && (
+                <div className="notif-dropdown">
+                  <div className="notif-head">Notifications</div>
+                  {notifications.length === 0 && (
+                    <div className="conversation-empty">No notifications</div>
+                  )}
+                  {notifications.map((n) => (
+                    <div className={`notif-item ${n.status}`} key={n.id}>
+                      <div className="notif-title">{n.title}</div>
+                      <div className="notif-msg">{n.message}</div>
+                      <div className="notif-time">
+                        {new Date(n.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -669,8 +980,36 @@ export default function ChatPage() {
             <div className="message-welcome">
               <h2>Welcome to Nova AI</h2>
               <p>Start a new conversation or pick one from the sidebar.</p>
+              <div className="starter-prompts">
+                {STARTER_PROMPTS.map((p) => (
+                  <button
+                    key={p}
+                    className="starter-chip"
+                    onClick={() => sendText(p)}
+                    disabled={busy}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
+
+          {summary && (
+            <div className="summary-banner">
+              <div className="summary-head">
+                <SparklesIcon />
+                <span>Summary</span>
+                <button className="summary-close" onClick={() => setSummary("")}>
+                  ×
+                </button>
+              </div>
+              <div className="summary-body">
+                <Markdown text={summary} />
+              </div>
+            </div>
+          )}
+
           {messages.map((m) => (
             <div
               key={m.id}
@@ -716,7 +1055,16 @@ export default function ChatPage() {
                       ) : (
                         m.content
                       )}
-                      {m.streaming && <span className="cursor-blink" />}
+                      {m.streaming &&
+                        (m.content ? (
+                          <span className="cursor-blink" />
+                        ) : (
+                          <span className="typing-dots">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        ))}
                     </div>
                   )}
                   {m.attachment && (
@@ -744,14 +1092,16 @@ export default function ChatPage() {
                         {m.citations.map((c) => (
                           <a
                             key={c.index}
-                            className="source-chip"
+                            className={`source-chip${c.type === "video" ? " video" : ""}`}
                             href={c.url}
                             target="_blank"
                             rel="noreferrer"
                           >
                             <span className="source-idx">{c.index}</span>
                             <span className="source-title">
-                              {c.title ?? c.url}
+                              {c.type === "video"
+                                ? `▶ ${c.title ?? c.url}`
+                                : (c.title ?? c.url)}
                             </span>
                           </a>
                         ))}
@@ -774,6 +1124,32 @@ export default function ChatPage() {
                         Edit
                       </button>
                     )}
+                    {m.role === "assistant" && (
+                      <>
+                        <button
+                          className={`msg-action${speakingId === m.id ? " active" : ""}`}
+                          onClick={() => handleSpeak(m)}
+                          title={speakingId === m.id ? "Stop reading" : "Read aloud"}
+                        >
+                          <SpeakerIcon />
+                          {speakingId === m.id ? "Stop" : "Listen"}
+                        </button>
+                        <button
+                          className={`msg-action reaction${reactions[m.id] === "up" ? " active" : ""}`}
+                          onClick={() => setReaction(m.id, "up")}
+                          title="Good answer"
+                        >
+                          <ThumbsUpIcon />
+                        </button>
+                        <button
+                          className={`msg-action reaction${reactions[m.id] === "down" ? " active" : ""}`}
+                          onClick={() => setReaction(m.id, "down")}
+                          title="Bad answer"
+                        >
+                          <ThumbsDownIcon />
+                        </button>
+                      </>
+                    )}
                     <button
                       className="msg-action danger"
                       onClick={() => removeMessage(m)}
@@ -782,6 +1158,23 @@ export default function ChatPage() {
                     </button>
                   </div>
                 )}
+                {followUps[m.id] &&
+                  followUps[m.id].length > 0 &&
+                  !m.streaming &&
+                  !busy && (
+                    <div className="followups">
+                      {followUps[m.id].map((q, i) => (
+                        <button
+                          key={i}
+                          className="followup-chip"
+                          onClick={() => sendText(q)}
+                          disabled={busy}
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
               </div>
             </div>
           ))}
@@ -799,6 +1192,21 @@ export default function ChatPage() {
 
         <form className="composer" onSubmit={handleSubmit}>
           <div className="composer-box">
+            {imagePreview && (
+              <div className="image-preview">
+                <img src={imagePreview} alt="Attachment preview" />
+                <button
+                  type="button"
+                  className="image-preview-remove"
+                  onClick={() => {
+                    setImagePreview(null);
+                    imageFileRef.current = null;
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
             <input
               className="composer-input"
               value={input}
@@ -810,6 +1218,38 @@ export default function ChatPage() {
             />
             <div className="composer-box-footer">
               <div className="composer-icons">
+                <button
+                  type="button"
+                  className={`icon-btn model-picker-btn${modelMenuOpen ? " active" : ""}`}
+                  title="Choose model"
+                  onClick={() => setModelMenuOpen((o) => !o)}
+                >
+                  <SparklesIcon />
+                  <span className="kb-chip">{modelName(provider, model)}</span>
+                </button>
+                {modelMenuOpen && (
+                  <div className="kb-menu model-menu">
+                    {PROVIDERS.map((p) => (
+                      <div key={p.id} className="model-menu-group">
+                        <div className="model-menu-label">{p.label}</div>
+                        {p.models.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={`kb-menu-item${provider === p.id && model === m.id ? " selected" : ""}`}
+                            onClick={() => {
+                              setProvider(p.id);
+                              setModel(m.id);
+                              setModelMenuOpen(false);
+                            }}
+                          >
+                            {m.name}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <button
                   type="button"
                   className={`icon-btn${agentsMenuOpen ? " active" : ""}${selectedAgent ? " active" : ""}`}
@@ -858,6 +1298,15 @@ export default function ChatPage() {
                 >
                   <PaperclipIcon />
                 </button>
+                <button
+                  type="button"
+                  className={`icon-btn${imagePreview ? " active" : ""}${visionBusy ? " busy" : ""}`}
+                  title="Attach an image to analyze"
+                  disabled={visionBusy}
+                  onClick={() => imageInputRef.current?.click()}
+                >
+                  <ImageIcon />
+                </button>
               </div>
               {busy ? (
                 <button
@@ -871,7 +1320,7 @@ export default function ChatPage() {
                 <button
                   type="submit"
                   className="composer-send"
-                  disabled={!activeId || !input.trim()}
+                  disabled={!activeId || (!input.trim() && !imagePreview)}
                   title="Send"
                 >
                   <SendIcon />
@@ -977,6 +1426,13 @@ export default function ChatPage() {
               hidden
               onChange={handleFileSelect}
             />
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={handleImageSelect}
+            />
           </div>
         </form>
       </main>
@@ -1015,6 +1471,18 @@ export default function ChatPage() {
         <ProjectsModal
           organizationId={organization?.id}
           onClose={() => setShowProjects(false)}
+        />
+      )}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onToast={showToast}
+        />
+      )}
+      {showAdmin && (
+        <AdminPanel
+          onClose={() => setShowAdmin(false)}
+          onToast={showToast}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

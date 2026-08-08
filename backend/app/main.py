@@ -351,6 +351,13 @@ def add_routes(app: FastAPI) -> None:
     # Include WebSocket router
     app.include_router(ws_router)
 
+    # Public read-only share page
+    from fastapi.responses import HTMLResponse
+
+    @app.get("/share/{token}", response_class=HTMLResponse, include_in_schema=False)
+    async def shared_conversation_page(token: str):
+        return SHARE_PAGE_HTML
+
 
 def add_metrics_endpoint(app: FastAPI) -> None:
     """Add Prometheus metrics endpoint."""
@@ -361,6 +368,62 @@ def add_metrics_endpoint(app: FastAPI) -> None:
 
 # Create app instance
 app = create_app()
+
+SHARE_PAGE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared conversation</title>
+<style>
+  body { margin:0; background:#0f1115; color:#e6e8ee; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:22px; font-weight:600; margin:0 0 24px; }
+  .msg { padding:14px 16px; border-radius:12px; margin:0 0 14px; line-height:1.55; font-size:14.5px; white-space:pre-wrap; word-wrap:break-word; }
+  .user { background:#1e2430; }
+  .assistant { background:#161b24; border:1px solid #262d3a; }
+  .label { display:inline-block; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; opacity:.55; margin-bottom:6px; }
+  .empty { opacity:.6; }
+  code { background:#0b0e13; border:1px solid #262d3a; border-radius:6px; padding:2px 6px; font-family:Consolas,Menlo,monospace; font-size:13px; }
+  pre { background:#0b0e13; border:1px solid #262d3a; border-radius:10px; padding:14px; overflow-x:auto; }
+  pre code { border:0; padding:0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Shared conversation</h1>
+  <div id="messages"><div class="empty">Loading...</div></div>
+</div>
+<script>
+const token = window.location.pathname.split("/").pop();
+async function load() {
+  try {
+    const res = await fetch("/api/v1/conversations/public/" + token);
+    if (!res.ok) throw new Error("Not found");
+    const data = await res.json();
+    document.getElementById("title").textContent = data.title;
+    const box = document.getElementById("messages");
+    if (!data.messages || !data.messages.length) {
+      box.innerHTML = '<div class="empty">This conversation has no messages.</div>';
+      return;
+    }
+    box.innerHTML = data.messages.map(function (m) {
+      const role = m.role === "user" ? "You" : "Assistant";
+      const content = escapeHtml(m.content || "");
+      const withCode = content.replace(/```(\\w*)\\n?([\\s\\S]*?)```/g, '<pre><code>$2</code></pre>');
+      return '<div class="msg ' + (m.role === "user" ? "user" : "assistant") + '"><div class="label">' + role + '</div>' + withCode + '</div>';
+    }).join("");
+  } catch (e) {
+    document.getElementById("messages").innerHTML = '<div class="empty">This shared conversation is no longer available.</div>';
+  }
+}
+function escapeHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+load();
+</script>
+</body>
+</html>"""
 
 
 if __name__ == "__main__":

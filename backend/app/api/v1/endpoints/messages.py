@@ -82,6 +82,7 @@ class MessageStreamRequest(BaseModel):
     """AI streaming request model."""
     content: str = Field(..., min_length=1)
     model: Optional[str] = None
+    provider_name: Optional[str] = None
     temperature: Optional[float] = Field(None, ge=0, le=2)
     max_tokens: Optional[int] = Field(None, ge=1, le=100000)
     stream: bool = True
@@ -396,6 +397,7 @@ async def stream_message(
                 assistant_message_id=assistant_message.id,
                 user=current_user,
                 model=request.model,
+                provider_name=request.provider_name,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 tools=request.tools,
@@ -433,6 +435,9 @@ async def stream_message(
             if conv and not conv.title:
                 title = " ".join(request.content.split())[:60] or "New conversation"
                 conv.title = title
+            elif conv and conv.title in ("New conversation", "Untitled"):
+                title = " ".join(request.content.split())[:60] or conv.title
+                conv.title = title
             await final_db.commit()
 
         yield f"data: {json.dumps({'type': 'done', 'message_id': str(assistant_message.id)})}\n\n"
@@ -446,3 +451,66 @@ async def stream_message(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class FollowupSuggestResponse(BaseModel):
+    """Follow-up question suggestions."""
+    suggestions: List[str]
+
+
+@router.post("/conversations/{conversation_id}/followups", response_model=FollowupSuggestResponse, summary="Suggest follow-up questions")
+async def suggest_followups(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate 3 short follow-up questions from the recent conversation."""
+    conv_result = await db.execute(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    conv = conv_result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    rows = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(desc(Message.created_at))
+        .limit(6)
+    )
+    history = list(reversed(rows.scalars().all()))
+    msgs = [{"role": m.role, "content": m.content} for m in history if m.content]
+    if not msgs:
+        return FollowupSuggestResponse(suggestions=[])
+
+    from app.ai.providers import default_provider
+
+    collected: List[str] = []
+    try:
+        async for event in default_provider().stream(
+            messages=msgs,
+            temperature=0.6,
+            max_tokens=150,
+            system_prompt=(
+                "Based on the conversation above, suggest exactly 3 short follow-up questions "
+                "the user might ask next. Respond with ONLY a JSON array of strings, e.g. "
+                '["question one", "question two", "question three"]. No other text.'
+            ),
+        ):
+            if event.get("type") == "content":
+                collected.append(event.get("content", ""))
+    except Exception:  # noqa: BLE001
+        return FollowupSuggestResponse(suggestions=[])
+
+    text = "".join(collected).strip()
+    suggestions: List[str] = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            suggestions = [str(x)[:120] for x in parsed[:3]]
+    except Exception:  # noqa: BLE001
+        import re
+
+        found = re.findall(r'"([^"]+)"', text)
+        suggestions = [x[:120] for x in found[:3]]
+    return FollowupSuggestResponse(suggestions=suggestions)

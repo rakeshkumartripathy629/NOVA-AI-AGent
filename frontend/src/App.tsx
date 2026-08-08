@@ -2,12 +2,18 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './components/LoginPage';
 import ChatPage from './components/ChatPage';
 import ResetPasswordPage from './components/ResetPasswordPage';
+import SharePage from './components/SharePage';
 
 function Root() {
   const { user, loading } = useAuth();
 
   if (window.location.pathname.startsWith('/reset-password')) {
     return <ResetPasswordPage />;
+  }
+
+  if (window.location.pathname.startsWith('/share/')) {
+    const token = window.location.pathname.slice('/share/'.length).split('/')[0];
+    return <SharePage token={token} />;
   }
 
   if (loading) {

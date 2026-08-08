@@ -75,6 +75,7 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.42b0",
     "opentelemetry-exporter-otlp>=1.22.0",
     "email-validator>=2.1.0",
+    "itsdangerous>=2.1.0",
     "pyotp>=2.9.0",
     "qrcode>=7.4.0",
     "stripe>=7.8.0",

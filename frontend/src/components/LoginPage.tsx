@@ -111,6 +111,9 @@ export default function LoginPage() {
 
         {providers && (providers.google || providers.github) && (
           <div className="auth-oauth">
+            <span className="auth-oauth-heading">
+              {mode === 'register' ? 'Sign up with' : 'Sign in with'}
+            </span>
             {providers.google && (
               <button
                 type="button"

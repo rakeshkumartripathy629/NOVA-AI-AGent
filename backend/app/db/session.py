@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +20,10 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+from app.core.logging import get_logger
+
+
+logger = get_logger("db.session")
 
 
 class Base(DeclarativeBase):
@@ -108,7 +113,14 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         # Import models to register metadata
         from app.models import Base as ModelBase  # noqa: F401
-        await conn.run_sync(ModelBase.metadata.create_all)
+        try:
+            await conn.run_sync(ModelBase.metadata.create_all)
+        except ProgrammingError as exc:
+            if "already exists" not in str(exc):
+                raise
+            # Schema already initialized by a previous run; create_all is not
+            # idempotent for metadata-level indexes on existing tables.
+            logger.warning("Database schema already exists, skipping create_all: %s", exc)
 
     await seed_all()
 

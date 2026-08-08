@@ -838,13 +838,28 @@ async def switch_organization(
 OAUTH_STATE_COOKIE = "oauth_state"
 
 
-def _oauth_redirect_uri(provider: str) -> str:
+def _origin_of(request: Optional[Request]) -> str:
+    """Return the origin the request arrived on, falling back to FRONTEND_URL.
+
+    The frontend proxies /api/* to the backend while preserving the browser's
+    Host header, so the origin matches whichever port the user is actually on
+    (dev: 5173/5174, prod: the onrender domain).
+    """
+    if request:
+        base = str(request.base_url).rstrip("/")
+        if base.startswith(("http://", "https://")):
+            return base
+    return settings.FRONTEND_URL.rstrip("/")
+
+
+def _oauth_redirect_uri(provider: str, request: Optional[Request] = None) -> str:
     """Build the OAuth redirect URI for the given provider.
 
     The callback lives on the API and is served on the same origin as the
-    frontend (nginx proxies /api/v1), so it is derived from FRONTEND_URL.
+    frontend (nginx / vite proxy /api/v1), so it is derived from the origin of
+    the incoming request, falling back to FRONTEND_URL.
     """
-    return f"{settings.FRONTEND_URL}/api/v1/auth/oauth/callback/{provider}"
+    return f"{_origin_of(request)}/api/v1/auth/oauth/callback/{provider}"
 
 
 def _oauth_enabled(provider: str) -> bool:
@@ -883,7 +898,7 @@ async def _start_oauth(provider: str, request: Request) -> RedirectResponse:
         )
     client_id, _ = _oauth_credentials(provider)
     state = secrets.token_urlsafe(32)
-    redirect_uri = _oauth_redirect_uri(provider)
+    redirect_uri = _oauth_redirect_uri(provider, request)
 
     if provider == "google":
         # prompt=select_account always shows Google's account chooser so the
@@ -1147,7 +1162,7 @@ async def oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle OAuth callback from the provider."""
-    frontend_url = settings.FRONTEND_URL
+    frontend_url = _origin_of(request)
     fail_redirect = f"{frontend_url}/?oauth_error=oauth_failed"
 
     if provider not in ("google", "github"):
@@ -1174,7 +1189,7 @@ async def oauth_callback(
         )
 
     try:
-        token_info = await _exchange_code(provider, code, _oauth_redirect_uri(provider))
+        token_info = await _exchange_code(provider, code, _oauth_redirect_uri(provider, request))
         profile = await _fetch_profile(provider, token_info["access_token"])
         user = await _find_or_create_oauth_user(db, provider, profile, token_info)
     except HTTPException as exc:

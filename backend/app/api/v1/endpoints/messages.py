@@ -440,6 +440,23 @@ async def stream_message(
                 conv.title = title
             await final_db.commit()
 
+        # Long-term memory: extract durable facts in the background
+        try:
+            from app.ai.memory import memory_enabled, schedule_extraction
+
+            if memory_enabled(current_user):
+                schedule_extraction(
+                    user_id=current_user.id,
+                    organization_id=getattr(conversation, "organization_id", None),
+                    conversation_id=conversation_id,
+                    user_content=request.content,
+                    assistant_content="".join(accumulated),
+                )
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).debug("Memory scheduling failed: %s", exc)
+
         yield f"data: {json.dumps({'type': 'done', 'message_id': str(assistant_message.id)})}\n\n"
 
     return StreamingResponse(

@@ -31,6 +31,7 @@ class UserUpdate(BaseModel):
     timezone: Optional[str] = Field(None, max_length=50)
     locale: Optional[str] = Field(None, max_length=10)
     settings: Optional[dict] = None
+    preferences: Optional[dict] = None
 
 
 class UserResponse(BaseModel):
@@ -51,6 +52,7 @@ class UserResponse(BaseModel):
     last_login_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    preferences: Optional[dict] = None
     
     class Config:
         from_attributes = True
@@ -165,6 +167,11 @@ async def update_my_profile(
 ):
     """Update current user's profile."""
     update_data = user_data.model_dump(exclude_unset=True)
+
+    if "preferences" in update_data and update_data["preferences"]:
+        merged = dict(current_user.preferences or {})
+        merged.update(update_data["preferences"])
+        update_data["preferences"] = merged
     
     result = await db.execute(
         select(User).where(User.id == current_user.id)

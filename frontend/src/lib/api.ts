@@ -627,6 +627,123 @@ export async function deleteApiKey(keyId: string): Promise<void> {
   await request<unknown>(`/api-keys/${keyId}`, { method: 'DELETE' });
 }
 
+// ---- Memory ----
+
+export type MemoryCategory =
+  | 'profile'
+  | 'skills'
+  | 'education'
+  | 'work_experience'
+  | 'project'
+  | 'goals'
+  | 'interests'
+  | 'preference'
+  | 'technical_preference'
+  | 'past_event'
+  | 'fact'
+  | 'topic';
+
+export interface MemoryItem {
+  id: string;
+  content: string;
+  category: MemoryCategory;
+  importance: number;
+  confidence: number;
+  use_count: number;
+  last_used_at?: string | null;
+  source_conversation_id?: string | null;
+  auto: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryListResponse {
+  memories: MemoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface MemorySearchResponse {
+  memories: MemoryItem[];
+  total: number;
+}
+
+export async function listMemories(opts?: {
+  search?: string;
+  category?: MemoryCategory;
+  page?: number;
+  page_size?: number;
+}): Promise<MemoryListResponse> {
+  const params = new URLSearchParams();
+  if (opts?.search) params.set('search', opts.search);
+  if (opts?.category) params.set('category', opts.category);
+  if (opts?.page && opts.page > 1) params.set('page', String(opts.page));
+  if (opts?.page_size) params.set('page_size', String(opts.page_size));
+  const qs = params.toString();
+  return request<MemoryListResponse>(`/memories${qs ? `?${qs}` : ''}`);
+}
+
+export async function getMemory(memoryId: string): Promise<MemoryItem> {
+  return request<MemoryItem>(`/memories/${memoryId}`);
+}
+
+export async function createMemory(
+  content: string,
+  category?: MemoryCategory,
+): Promise<MemoryItem> {
+  return request<MemoryItem>('/memories', {
+    method: 'POST',
+    body: JSON.stringify({ content, category: category ?? 'fact' }),
+  });
+}
+
+export async function updateMemory(
+  memoryId: string,
+  input: { content?: string; category?: MemoryCategory; importance?: number },
+): Promise<MemoryItem> {
+  return request<MemoryItem>(`/memories/${memoryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteMemory(memoryId: string): Promise<void> {
+  await request<unknown>(`/memories/${memoryId}`, { method: 'DELETE' });
+}
+
+export async function deleteAllMemories(): Promise<void> {
+  await request<unknown>('/memories', { method: 'DELETE' });
+}
+
+export async function searchMemories(
+  query: string,
+  limit = 20,
+): Promise<MemorySearchResponse> {
+  return request<MemorySearchResponse>('/memories/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, limit }),
+  });
+}
+
+export async function searchConversations(
+  q: string,
+  limit = 10,
+): Promise<{
+  results: Array<{
+    conversation_id: string;
+    title: string;
+    summary?: string | null;
+    snippet: string;
+    score: number;
+  }>;
+  total: number;
+}> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  return request(`/conversations/search?${params.toString()}`);
+}
+
 // ---- Webhooks ----
 
 export interface Webhook {
@@ -879,6 +996,17 @@ export interface User {
   full_name?: string;
   role?: string;
   is_superuser?: boolean;
+  preferences?: Record<string, unknown>;
+}
+
+export async function updateMyProfile(input: {
+  full_name?: string;
+  preferences?: Record<string, unknown>;
+}): Promise<User> {
+  return request<User>('/users/me', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }
 
 export interface Organization {

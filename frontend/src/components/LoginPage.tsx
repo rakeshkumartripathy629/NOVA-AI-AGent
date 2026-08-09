@@ -25,7 +25,8 @@ export default function LoginPage() {
         unsupported_provider: 'That login provider is not supported.',
         oauth_failed: 'Could not sign in with that provider. Please try again.',
       };
-      setError(messages[oauthError] ?? 'Could not sign in with that provider.');
+      const detail = params.get('oauth_detail');
+      setError((messages[oauthError] ?? 'Could not sign in with that provider.') + (detail ? ` (${detail})` : ''));
       window.history.replaceState({}, '', window.location.pathname);
     }
     api

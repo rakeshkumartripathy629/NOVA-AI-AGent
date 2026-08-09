@@ -6,7 +6,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import UUID
 
 import httpx
@@ -143,6 +143,7 @@ class UserResponse(BaseModel):
     email_verified: bool
     is_active: bool
     is_superuser: bool
+    preferences: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     
@@ -478,9 +479,15 @@ async def register(
         organization = org
     else:
         # Create personal organization
+        base_slug = f"{user.username}-workspace"
+        slug = base_slug
+        counter = 2
+        while await db.scalar(select(Organization.id).where(Organization.slug == slug)):
+            slug = f"{base_slug}-{counter}"
+            counter += 1
         org = Organization(
             name=f"{user.username}'s Workspace",
-            slug=f"{user.username}-workspace",
+            slug=slug,
             description=f"Personal workspace for {user.username}",
             owner_id=user.id,
         )
@@ -982,10 +989,16 @@ async def _exchange_code(provider: str, code: str, redirect_uri: str) -> dict:
                 },
             )
     if resp.status_code != 200:
-        logger.warning("OAuth token exchange failed for %s: HTTP %s", provider, resp.status_code)
+        body = resp.text[:300]
+        logger.warning(
+            "OAuth token exchange failed for %s: HTTP %s body=%s",
+            provider,
+            resp.status_code,
+            body,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"OAuth token exchange failed ({provider})",
+            detail=f"OAuth token exchange failed ({provider}): {body}",
         )
     data = resp.json()
     if not data.get("access_token"):
@@ -1086,7 +1099,26 @@ async def _find_or_create_oauth_user(
     oauth = result.scalar_one_or_none()
     if oauth:
         user = await db.get(User, oauth.user_id)
-        if user is None or not user.is_active or user.status != UserStatus.ACTIVE:
+        if user is not None and (user.status == UserStatus.DELETED or user.is_deleted):
+            # The account was soft-deleted (anonymized). The same identity is
+            # signing in again via OAuth, so reactivate it instead of blocking.
+            if email and not await db.scalar(
+                select(User.id).where(User.email == email, User.id != user.id)
+            ):
+                user.email = email
+            user.username = await _unique_username(db, (email or "user").split("@")[0])
+            user.full_name = name or user.full_name
+            user.avatar_url = avatar_url
+            user.status = UserStatus.ACTIVE
+            user.is_active = True
+            user.is_deleted = False
+            user.deleted_at = None
+            user.email_verified = True
+            user.email_verified_at = now
+            user.hashed_password = None
+            user.auth_provider = AuthProvider(provider)
+            logger.info("Reactivated previously deleted OAuth account for %s", email)
+        elif user is None or not user.is_active or user.status != UserStatus.ACTIVE:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Account is inactive or suspended",
@@ -1097,6 +1129,7 @@ async def _find_or_create_oauth_user(
             oauth.token_expires_at = now + timedelta(seconds=expires_in)
         oauth.avatar_url = avatar_url
         oauth.profile = profile
+        oauth.provider_email = email
         await db.commit()
         return user
 
@@ -1129,9 +1162,15 @@ async def _find_or_create_oauth_user(
     db.add(user)
     await db.flush()
 
+    base_slug = f"{username}-workspace"
+    slug = base_slug
+    counter = 2
+    while await db.scalar(select(Organization.id).where(Organization.slug == slug)):
+        slug = f"{base_slug}-{counter}"
+        counter += 1
     org = Organization(
         name=f"{username}'s Workspace",
-        slug=f"{username}-workspace",
+        slug=slug,
         description=f"Personal workspace for {username}",
         owner_id=user.id,
     )
@@ -1194,6 +1233,11 @@ async def oauth_callback(
         user = await _find_or_create_oauth_user(db, provider, profile, token_info)
     except HTTPException as exc:
         logger.warning("OAuth callback error for %s: %s", provider, exc.detail)
+        if not settings.is_production and exc.detail:
+            return RedirectResponse(
+                f"{frontend_url}/?oauth_error=oauth_failed&oauth_detail={quote(str(exc.detail))}",
+                status_code=status.HTTP_302_FOUND,
+            )
         return RedirectResponse(fail_redirect)
     except Exception:  # noqa: BLE001
         logger.exception("Unexpected OAuth callback error for %s", provider)

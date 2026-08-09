@@ -1,3 +1,1 @@
-"""
-Application services: business logic shared across endpoints and workers.
-"""
+"""Services package: long-term memory, embeddings, vector store and search."""

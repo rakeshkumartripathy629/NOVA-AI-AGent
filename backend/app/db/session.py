@@ -122,6 +122,15 @@ async def init_db() -> None:
             # idempotent for metadata-level indexes on existing tables.
             logger.warning("Database schema already exists, skipping create_all: %s", exc)
 
+    # Memory feature additions (new columns / enum values / summaries table) are
+    # not covered by create_all on existing databases.
+    try:
+        from app.db.ensure_schema import ensure_memory_schema
+
+        await ensure_memory_schema()
+    except Exception:  # noqa: BLE001
+        logger.exception("Memory schema ensure failed")
+
     await seed_all()
 
 

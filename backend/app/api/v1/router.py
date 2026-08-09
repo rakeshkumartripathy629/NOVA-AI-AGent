@@ -25,6 +25,7 @@ from app.api.v1.endpoints import (
     voice,
     vision,
     admin,
+    memories,
 )
 
 api_router = APIRouter()
@@ -92,3 +93,7 @@ api_router.include_router(vision.router, prefix="/vision", tags=["Vision"])
 
 # Admin
 api_router.include_router(admin.router, prefix="/admin", tags=["Admin"])
+
+# Memory
+api_router.include_router(memories.router, prefix="/memory", tags=["Memory"])
+api_router.include_router(memories.router, prefix="/memories", tags=["Memory"])

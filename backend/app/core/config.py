@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     RAG_SIMILARITY_THRESHOLD: float = 0.45
     RAG_RERANK_TOP_K: int = 10
     RAG_RERANK_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    RAG_SEARCH_TYPE: str = "similarity"  # similarity | mmr
+    RAG_MMR_LAMBDA: float = 0.7
     
     # Web Search
     SEARCH_API_KEY: Optional[str] = None
@@ -263,6 +265,37 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"
     LOG_FILE: Optional[str] = None
     
+    # Long-term Memory (assistant remembers facts across conversations)
+    MEMORY_ENABLED: bool = True
+    MEMORY_AUTO_EXTRACT: bool = True
+    MEMORY_RECALL_LIMIT: int = 8
+    MEMORY_EXTRACTION_MODEL: Optional[str] = None
+    MEMORY_EXTRACTION_MIN_MESSAGE_LEN: int = 20
+    MEMORY_EXTRACTION_MIN_REPLY_LEN: int = 40
+    MEMORY_EXTRACTION_MAX_ITEMS: int = 5
+    # Embedding / vector store configuration (configurable, changeable later).
+    # MEMORY_EMBEDDING_PROVIDER: auto | gemini | openai | local
+    MEMORY_EMBEDDING_PROVIDER: str = "auto"
+    # MEMORY_VECTOR_STORE: auto | qdrant | postgres
+    MEMORY_VECTOR_STORE: str = "auto"
+    # Ranking weights (must sum to 1.0): similarity + importance + recency + confidence
+    MEMORY_WEIGHT_SIMILARITY: float = 0.60
+    MEMORY_WEIGHT_IMPORTANCE: float = 0.15
+    MEMORY_WEIGHT_RECENCY: float = 0.15
+    MEMORY_WEIGHT_CONFIDENCE: float = 0.10
+    # Memories scoring below this combined relevance are never injected.
+    MEMORY_RELEVANCE_THRESHOLD: float = 0.25
+    # Hard cap on tokens used for the "Remembered context" prompt block.
+    MEMORY_TOKEN_LIMIT: int = 1200
+    # Conversation summaries (long-conversation memory + historical recall)
+    MEMORY_SUMMARY_ENABLED: bool = True
+    MEMORY_SUMMARY_MODEL: Optional[str] = None
+    MEMORY_SUMMARY_TRIGGER_MESSAGES: int = 20
+    MEMORY_SUMMARY_MAX_LENGTH: int = 800
+
+    # Chat behavior
+    CHAT_DEFAULT_TEMPERATURE: float = 0.7
+
     # Feature Flags
     FEATURE_WEB_SEARCH: bool = True
     FEATURE_VOICE: bool = True

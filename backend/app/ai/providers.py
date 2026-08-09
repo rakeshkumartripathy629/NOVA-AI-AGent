@@ -38,6 +38,29 @@ class ChatProvider:
         """Return embedding vectors for a list of texts."""
         raise NotImplementedError
 
+    async def complete(
+        self,
+        messages: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Non-streaming completion: accumulate ``stream()`` into a single string."""
+        parts: List[str] = []
+        async for event in self.stream(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            system_prompt=system_prompt,
+            **kwargs,
+        ):
+            if event.get("type") == "content":
+                parts.append(event.get("content", ""))
+        return "".join(parts)
+
     async def transcribe(self, audio_bytes: bytes, **kwargs: Any) -> str:
         raise NotImplementedError
 

@@ -2318,6 +2318,22 @@ input {
   border-color: var(--accent);
 }
 
+.settings-select {
+  flex: 0 0 auto;
+  min-width: 130px;
+  cursor: pointer;
+}
+
+.folder-save.muted {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.folder-save.muted:hover {
+  background: var(--border);
+}
+
 .settings-item {
   display: flex;
   align-items: center;
@@ -2346,6 +2362,26 @@ input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.memory-count {
+  margin: 2px 0 8px;
+}
+
+.settings-item-edit {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.settings-importance {
+  flex: 0 0 64px;
+  min-width: 64px;
+  margin-left: 6px;
+}
+
+.memory-load-more {
+  width: 100%;
+  margin-top: 4px;
 }
 
 .status-badge {

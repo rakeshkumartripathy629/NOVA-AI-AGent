@@ -174,6 +174,37 @@ async def list_conversations(
     )
 
 
+class ConversationSearchResult(BaseModel):
+    """A single conversation search result."""
+    conversation_id: UUID
+    title: str
+    summary: Optional[str] = None
+    snippet: str = ""
+    score: float
+
+
+class ConversationSearchResponse(BaseModel):
+    """Conversation search response model."""
+    results: List[ConversationSearchResult]
+    total: int
+
+
+@router.get("/search", response_model=ConversationSearchResponse, summary="Search conversations")
+async def search_conversations(
+    q: str = Query(..., min_length=1, max_length=300, description="Search query"),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Search the current user's conversations (titles, summaries, messages)."""
+    from app.services.conversation_search import search_user_conversations
+
+    results = await search_user_conversations(current_user.id, q, limit=limit)
+    return ConversationSearchResponse(
+        results=[ConversationSearchResult(**r) for r in results],
+        total=len(results),
+    )
+
+
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED, summary="Create conversation")
 async def create_conversation(
     conversation_data: ConversationCreate,

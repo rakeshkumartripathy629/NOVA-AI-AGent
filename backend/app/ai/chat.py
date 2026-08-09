@@ -11,6 +11,8 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.ai.providers import ProviderError, default_provider, get_provider
+from app.ai.prompts import build_base_system_prompt
+from app.ai.memory import memory_enabled
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import get_db_context
@@ -107,14 +109,23 @@ async def stream_chat_response(
 
     # RAG context
     citations: List[Dict[str, Any]] = []
-    base_system_prompt = (
-        system_prompt
-        or "You are a helpful assistant. Be concise: answer exactly what the user asked "
-        "in short, clear sentences. Prefer a one-line answer or a brief bullet list. "
-        "Never add filler, repetition, greetings, or unnecessary details. "
-        "Keep answers under ~100 words unless the user explicitly asks for a long or "
-        "detailed explanation."
-    )
+
+    # Long-term memory context
+    memory_block = ""
+    if memory_enabled(user):
+        try:
+            from app.ai.memory import recall_context
+
+            memory_block = await recall_context(user.id, user_message_content)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Memory recall failed: %s", exc)
+
+    # Always start from a concrete system prompt, then layer memory on top so it
+    # reaches the provider even in the default flow (no custom system_prompt).
+    base_system_prompt = system_prompt or build_base_system_prompt(user, user_message_content)
+    if memory_block:
+        base_system_prompt = f"{base_system_prompt}\n\n{memory_block}"
+    system_prompt = base_system_prompt
     if knowledge_base_ids:
         retrieved = await _retrieve_context(conversation.id, knowledge_base_ids, user_message_content)
         if retrieved:

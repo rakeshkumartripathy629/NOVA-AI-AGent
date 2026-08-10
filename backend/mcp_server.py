@@ -10,10 +10,20 @@ from mcp import types
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
-from mcp.types import ListToolsRequest, ListToolsResult, CallToolRequest, CallToolResult, TextContent
+from mcp.types import ListToolsRequest, ListToolsResult, CallToolRequest, CallToolResult, ServerCapabilities, TextContent
 from starlette.applications import Starlette
 from starlette.routing import Route
-from starlette.requests import Request
+from starlette.types import Receive, Scope, Send
+
+
+class _ASGIEndpoint:
+    """Starlette 1.x treats classes as ASGI apps (functions become Request endpoints)."""
+
+    def __init__(self, handler):
+        self._handler = handler
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._handler(scope, receive, send)
 
 app = Server("nova-ai-mcp-server")
 sse_transport = SseServerTransport("/messages")
@@ -185,19 +195,27 @@ app.add_request_handler("tools/list", ListToolsRequest, handle_list_tools)
 app.add_request_handler("tools/call", CallToolRequest, handle_call_tool)
 
 
-async def handle_sse(request: Request):
-    async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
-        await app.run(streams[0], streams[1], InitializationOptions(server_name="nova-ai-mcp", server_version="1.0.0"))
+async def handle_sse(scope, receive, send):
+    async with sse_transport.connect_sse(scope, receive, send) as streams:
+        await app.run(
+            streams[0],
+            streams[1],
+            InitializationOptions(
+                server_name="nova-ai-mcp",
+                server_version="1.0.0",
+                capabilities=ServerCapabilities(),
+            ),
+        )
 
 
-async def handle_messages(request: Request):
-    await sse_transport.handle_post_message(request.scope, request.receive, request._send)
+async def handle_messages(scope, receive, send):
+    await sse_transport.handle_post_message(scope, receive, send)
 
 
 starlette_app = Starlette(
     routes=[
-        Route("/sse", endpoint=handle_sse, methods=["GET"]),
-        Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        Route("/sse", endpoint=_ASGIEndpoint(handle_sse), methods=["GET"]),
+        Route("/messages", endpoint=_ASGIEndpoint(handle_messages), methods=["POST"]),
     ]
 )
 

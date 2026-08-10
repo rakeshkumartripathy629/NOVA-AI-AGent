@@ -15,6 +15,7 @@ COPY pyproject.toml README.md ./
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./
+COPY mcp_server.py ./
 
 RUN pip install --upgrade pip && pip install .
 

@@ -231,9 +231,8 @@ class Settings(BaseSettings):
     
     # MCP (Model Context Protocol)
     MCP_ENABLED: bool = True
-    MCP_SERVERS: dict = {
-        "filesystem": {"transport": "stdio", "command": "mcp-server-filesystem"},
-    }
+    MCP_SERVER_URL: str = "http://localhost:9002"
+    MCP_SERVER_TIMEOUT: int = 30
     
     # Analytics
     POSTHOG_API_KEY: Optional[str] = None

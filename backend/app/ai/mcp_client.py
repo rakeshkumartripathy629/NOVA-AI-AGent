@@ -1,45 +1,39 @@
-"""MCP client for calling external MCP servers."""
+﻿"""MCP client for calling external MCP servers (SSE transport)."""
 from __future__ import annotations
 
-import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-import httpx
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger("ai.mcp")
 
-MCP_SERVER_URL = "http://localhost:9002"
+
+def _sse_url() -> str:
+    return settings.MCP_SERVER_URL.rstrip("/") + "/sse"
 
 
 async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     """Call a tool on the external MCP server."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{MCP_SERVER_URL}/messages",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": tool_name,
-                        "arguments": arguments,
-                    },
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if "result" in data and "content" in data["result"]:
-                content = data["result"]["content"]
-                if isinstance(content, list) and content:
-                    return content[0].get("text", str(content))
-                return str(content)
-            return str(data)
+        async with sse_client(
+            _sse_url(), timeout=settings.MCP_SERVER_TIMEOUT
+        ) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments or {})
+                if getattr(result, "isError", False):
+                    return f"Tool call failed: {result.content}"
+                parts = []
+                for block in getattr(result, "content", []) or []:
+                    text = getattr(block, "text", None)
+                    if text is not None:
+                        parts.append(text)
+                return "\n".join(parts) if parts else str(result.content)
     except Exception as exc:
         logger.warning("MCP tool call failed: %s", exc)
         return f"Tool call failed: {exc}"
@@ -48,22 +42,19 @@ async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
 async def get_mcp_tools() -> List[Dict[str, Any]]:
     """Get list of available MCP tools."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{MCP_SERVER_URL}/messages",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/list",
-                    "params": {},
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if "result" in data and "tools" in data["result"]:
-                return data["result"]["tools"]
-            return []
+        async with sse_client(_sse_url(), timeout=10) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.list_tools()
+                return [
+                    {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "inputSchema": tool.inputSchema
+                        or {"type": "object", "properties": {}},
+                    }
+                    for tool in result.tools
+                ]
     except Exception as exc:
         logger.warning("Failed to list MCP tools: %s", exc)
         return []
@@ -95,7 +86,7 @@ async def execute_mcp_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[Dict[
                 arguments = json.loads(arguments)
             except json.JSONDecodeError:
                 arguments = {}
-        
+
         result = await call_mcp_tool(function_name, arguments)
         results.append({
             "tool_call_id": call.get("id"),

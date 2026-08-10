@@ -24,6 +24,12 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  mcp:
+    build: ./backend
+    command: ["python", "mcp_server.py"]
+    ports:
+      - "9002:9002"
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"

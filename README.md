@@ -57,8 +57,23 @@ docker compose logs -f backend # follow backend logs
 | redis     | 6379*      | Cache / Celery broker            |
 | qdrant    | 6333*      | Vector database (RAG)            |
 | minio     | 9000/9001  | File storage (S3-compatible)     |
+| mcp       | 9002       | MCP server (web search, files)   |
 
-\* Database, Redis, and Qdrant are only reachable inside the Docker network; only frontend, backend, and MinIO are published to the host.
+\* Database, Redis, and Qdrant are only reachable inside the Docker network; only frontend, backend, MinIO, and the MCP server are published to the host.
+
+### MCP (Model Context Protocol) server
+
+Nova AI exposes an MCP server on port `9002` (SSE transport) that the chat agent
+uses for tool calling: `web_search`, `read_file`, `list_directory`, and `fetch_url`.
+
+```bash
+docker compose up -d mcp                 # run the MCP server
+# or locally:
+cd backend && python mcp_server.py
+```
+
+Set `MCP_ENABLED=true` and `MCP_SERVER_URL` in your `.env` to wire the MCP tools
+into chat. When the server is unreachable the chat agent degrades gracefully.
 
 ## Local development (without Docker)
 

@@ -890,10 +890,11 @@ def _origin_of(request: Optional[Request]) -> str:
 def _oauth_redirect_uri(provider: str, request: Optional[Request] = None) -> str:
     """Build the OAuth redirect URI for the given provider.
 
-    The callback lives on the API and is served on the same origin as the
-    frontend (nginx / vite proxy /api/v1), so it is derived from the origin of
-    the incoming request, falling back to FRONTEND_URL.
+    Always uses FRONTEND_URL in production to avoid redirect_uri_mismatch
+    behind reverse proxies (nginx, Render, etc.).
     """
+    if settings.is_production and settings.FRONTEND_URL:
+        return f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/auth/oauth/callback/{provider}"
     return f"{_origin_of(request)}/api/v1/auth/oauth/callback/{provider}"
 
 

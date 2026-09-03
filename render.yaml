@@ -30,7 +30,13 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GEMINI_API_KEY
-        value: ""
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: "groq/compound-mini"
+      - key: MEMORY_EMBEDDING_PROVIDER
+        value: "local"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -59,8 +65,3 @@ services:
         sync: false
       - key: FIRST_SUPERUSER_USERNAME
         value: admin
-
-  # - type: disk  # Optional (paid): persistent uploads. Mounts at /var/lib/nova-ai
-  #   name: nova-ai-data
-  #   mountPath: /var/lib/nova-ai
-  #   sizeGB: 1

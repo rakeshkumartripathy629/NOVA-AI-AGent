@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     ]
     
     # CSRF — use same stable secret as JWT
-    CSRF_SECRET: str = Field(default=None)
+    CSRF_SECRET: str = ""
     CSRF_COOKIE_NAME: str = "csrf_token"
     CSRF_HEADER_NAME: str = "X-CSRF-Token"
     

@@ -32,8 +32,24 @@ server {
         proxy_read_timeout 3600s;
     }
 
-    # Health check -> backend
-    location = /health {
+    # Health check -> backend (all /health/* paths)
+    location /health {
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    # Metrics -> backend
+    location /metrics {
+        proxy_pass http://127.0.0.1:8000;
+    }
+
+    # Docs -> backend
+    location /docs {
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location /redoc {
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location /openapi.json {
         proxy_pass http://127.0.0.1:8000;
     }
 

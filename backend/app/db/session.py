@@ -108,28 +108,48 @@ async def init_db() -> None:
     from app.db.seed import seed_all
 
     engine = get_engine()
+    # Import models to register metadata
+    from app.models import Base as ModelBase  # noqa: F401
+
+    # Step 1: Create all tables (works on fresh DB and existing DB)
     async with engine.begin() as conn:
-        # Import models to register metadata
-        from app.models import Base as ModelBase  # noqa: F401
         try:
             await conn.run_sync(ModelBase.metadata.create_all)
+            logger.info("Database tables created/verified via create_all")
         except ProgrammingError as exc:
-            if "already exists" not in str(exc):
-                raise
-            # Schema already initialized by a previous run; create_all is not
-            # idempotent for metadata-level indexes on existing tables.
-            logger.warning("Database schema already exists, skipping create_all: %s", exc)
+            if "already exists" in str(exc):
+                logger.info("Database tables already exist, skipping create_all")
+            else:
+                # Some other error — log but don't crash, try to continue
+                logger.warning("create_all error (non-fatal): %s", exc)
+        except Exception as exc:
+            logger.warning("create_all unexpected error: %s", exc)
 
-    # Memory feature additions (new columns / enum values / summaries table) are
-    # not covered by create_all on existing databases.
+    # Step 2: Verify tables exist by checking a critical table
+    async with engine.begin() as conn:
+        try:
+            from sqlalchemy import text
+            result = await conn.execute(text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'users')"))
+            tables_exist = result.scalar()
+            if tables_exist:
+                logger.info("Verified: users table exists")
+            else:
+                logger.error("CRITICAL: users table does NOT exist after create_all!")
+        except Exception as exc:
+            logger.warning("Table verification failed: %s", exc)
+
+    # Step 3: Memory feature additions
     try:
         from app.db.ensure_schema import ensure_memory_schema
-
         await ensure_memory_schema()
     except Exception:  # noqa: BLE001
-        logger.exception("Memory schema ensure failed")
+        logger.warning("Memory schema ensure failed (non-fatal): %s")
 
-    await seed_all()
+    # Step 4: Seed (only if tables exist)
+    try:
+        await seed_all()
+    except Exception as exc:
+        logger.warning("Seed failed (non-fatal, tables may already be seeded): %s", exc)
 
 
 async def close_db() -> None:

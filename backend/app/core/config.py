@@ -384,10 +384,6 @@ def get_settings() -> Settings:
         _missing = []
         if s.SECRET_KEY == "":
             _missing.append("SECRET_KEY")
-        if not s.GOOGLE_CLIENT_SECRET:
-            _missing.append("GOOGLE_CLIENT_SECRET")
-        if not s.SMTP_PASSWORD:
-            _missing.append("SMTP_PASSWORD")
         if _missing:
             raise RuntimeError(
                 f"Production requires these env vars: {', '.join(_missing)}. "

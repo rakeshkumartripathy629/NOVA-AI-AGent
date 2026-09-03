@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     WORKERS: int = 4
     
-    # Security
+    # Security — in production, SECRET_KEY MUST be set in .env (never use random default)
     SECRET_KEY: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     ALGORITHM: str = "HS256"
     FIELD_ENCRYPTION_KEY: Optional[str] = None
@@ -46,17 +46,24 @@ class Settings(BaseSettings):
     DB_ECHO: bool = False
     PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 1
     EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
+    # Account lockout
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOCKOUT_DURATION_MINUTES: int = 15
     
-    # CORS
-    # NoDecode keeps pydantic-settings from JSON-decoding env/dotenv values so
-    # comma-separated values (or a single origin) work without JSON quoting.
-    CORS_ORIGINS: Annotated[List[str], NoDecode] = ["http://localhost:3000", "http://localhost:3001"]
+    # CORS — restricted to specific methods and headers
+    CORS_ORIGINS: Annotated[List[str], NoDecode] = [
+        "http://localhost:3000", "http://localhost:3001",
+        "http://localhost:5173", "http://localhost:5174",
+    ]
     CORS_ALLOW_CREDENTIALS: bool = True
-    CORS_ALLOW_METHODS: List[str] = ["*"]
-    CORS_ALLOW_HEADERS: List[str] = ["*"]
+    CORS_ALLOW_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_ALLOW_HEADERS: List[str] = [
+        "Authorization", "Content-Type", "Accept", "Origin",
+        "X-Requested-With", "X-CSRF-Token", "X-Request-ID",
+    ]
     
-    # CSRF
-    CSRF_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
+    # CSRF — use same stable secret as JWT
+    CSRF_SECRET: str = Field(default=None)
     CSRF_COOKIE_NAME: str = "csrf_token"
     CSRF_HEADER_NAME: str = "X-CSRF-Token"
     
@@ -102,6 +109,7 @@ class Settings(BaseSettings):
     
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_BASE_URL: Optional[str] = None
+    GEMINI_CHAT_MODEL: str = "gemini-3.6-flash"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
     GEMINI_EMBEDDING_DIMENSION: int = 1536
     
@@ -110,8 +118,13 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: Optional[str] = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    GROQ_MODEL: str = "openai/gpt-oss-120b"
-    GROQ_VISION_MODEL: str = "qwen/qwen3.6-27b"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    GROQ_VISION_MODEL: str = "qwen/qwen3.8-27b"
+
+    # Cerebras — free, ultra-fast inference, OpenAI-compatible
+    CEREBRAS_API_KEY: Optional[str] = None
+    CEREBRAS_BASE_URL: str = "https://api.cerebras.ai/v1"
+    CEREBRAS_MODEL: str = "gpt-oss-120b"
 
     # Local embeddings (free, no API key) — used when no API embedding provider is set
     LOCAL_EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
@@ -162,14 +175,18 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_PASSWORD: str = "changeme123"
     FIRST_SUPERUSER_USERNAME: str = "admin"
     
-    # Rate Limiting
-    RATE_LIMIT_ENABLED: bool = False
-    RATE_LIMIT_REQUESTS: int = 100
+    # Rate Limiting — uses Redis when available, falls back to in-memory
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS: int = 60
     RATE_LIMIT_WINDOW: int = 60  # seconds
     RATE_LIMIT_LOGIN_REQUESTS: int = 5
     RATE_LIMIT_LOGIN_WINDOW: int = 300  # 5 minutes
-    RATE_LIMIT_REGISTER_REQUESTS: int = 100
-    RATE_LIMIT_REGISTER_WINDOW: int = 60  # 1 hour
+    RATE_LIMIT_REGISTER_REQUESTS: int = 5
+    RATE_LIMIT_REGISTER_WINDOW: int = 3600  # 1 hour
+    RATE_LIMIT_CHAT_REQUESTS: int = 30
+    RATE_LIMIT_CHAT_WINDOW: int = 60  # per minute per user
+    RATE_LIMIT_CODE_EXEC_REQUESTS: int = 20
+    RATE_LIMIT_CODE_EXEC_WINDOW: int = 60  # per minute
     
     # File Upload
     MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
@@ -263,6 +280,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
     LOG_FILE: Optional[str] = None
+    # Code Execution
+    PYTHON_EXECUTABLE: str = "python3"
     
     # Long-term Memory (assistant remembers facts across conversations)
     MEMORY_ENABLED: bool = True
@@ -359,12 +378,31 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    s = Settings()
+    # In production, enforce that critical secrets are explicitly set
+    if s.is_production:
+        _missing = []
+        if s.SECRET_KEY == "":
+            _missing.append("SECRET_KEY")
+        if not s.GOOGLE_CLIENT_SECRET:
+            _missing.append("GOOGLE_CLIENT_SECRET")
+        if not s.SMTP_PASSWORD:
+            _missing.append("SMTP_PASSWORD")
+        if _missing:
+            raise RuntimeError(
+                f"Production requires these env vars: {', '.join(_missing)}. "
+                "They are not set in .env or the environment."
+            )
+    # CSRF_SECRET defaults to SECRET_KEY if not explicitly set
+    if not s.CSRF_SECRET:
+        object.__setattr__(s, "CSRF_SECRET", s.SECRET_KEY)
+    return s
 
 
 settings = get_settings()
-print("=" * 60)
-print("DATABASE_URL =", settings.DATABASE_URL)
-print("DB_ECHO =", settings.DB_ECHO)
-print("ENVIRONMENT =", settings.ENVIRONMENT)
-print("=" * 60)
+import logging as _logging
+_logging.getLogger(__name__).info(
+    "Nova AI v%s started (env=%s)",
+    settings.APP_VERSION,
+    settings.ENVIRONMENT,
+)

@@ -4,12 +4,16 @@ Security utilities for authentication and authorization.
 import secrets
 import hashlib
 import hmac
+import time
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union, List
 from uuid import UUID
 
 from jose import jwt, JWTError
 from fastapi import HTTPException, status, Depends, Request
+
+logger = logging.getLogger(__name__)
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -462,50 +466,99 @@ def verify_webhook_signature(
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter."""
+    """Rate limiter: Redis-backed when available, falls back to in-memory."""
     
     def __init__(self):
         self._requests: dict[str, list[float]] = {}
+        self._redis = None
+        self._redis_attempted = False
     
-    def is_allowed(
-        self,
-        key: str,
-        limit: int,
-        window: int,
-    ) -> bool:
-        """Check if request is allowed."""
-        import time
-        now = time.time()
+    def _get_redis(self):
+        """Lazy-connect to Redis."""
+        if self._redis_attempted:
+            return self._redis
+        self._redis_attempted = True
+        try:
+            import redis as _redis
+            from app.core.config import settings as _s
+            self._redis = _redis.from_url(_s.REDIS_URL, decode_responses=True, socket_timeout=2)
+            self._redis.ping()
+            logger.info("Rate limiter using Redis backend")
+        except Exception:
+            self._redis = None
+            logger.info("Rate limiter using in-memory backend (Redis unavailable)")
+        return self._redis
+    
+    def is_allowed(self, key: str, limit: int, window: int) -> bool:
+        """Check if request is allowed using sliding window."""
+        r = self._get_redis()
+        if r:
+            try:
+                pipe = r.pipeline()
+                now = time.time()
+                window_start = now - window
+                # Remove old entries and count current
+                pipe.zremrangebyscore(key, 0, window_start)
+                pipe.zcard(key)
+                pipe.zadd(key, {str(now): now})
+                pipe.expire(key, window)
+                results = pipe.execute()
+                count = results[1]
+                return count < limit
+            except Exception:
+                pass  # Fall through to in-memory
         
+        # In-memory fallback
+        now = time.time()
         if key not in self._requests:
             self._requests[key] = []
-        
-        # Remove old requests outside window
         self._requests[key] = [
-            req_time for req_time in self._requests[key]
-            if now - req_time < window
+            t for t in self._requests[key] if now - t < window
         ]
-        
         if len(self._requests[key]) >= limit:
             return False
-        
         self._requests[key].append(now)
         return True
     
     def get_remaining(self, key: str, limit: int, window: int) -> int:
         """Get remaining requests."""
-        import time
+        r = self._get_redis()
+        if r:
+            try:
+                now = time.time()
+                window_start = now - window
+                r.zremrangebyscore(key, 0, window_start)
+                count = r.zcard(key)
+                return max(0, limit - count)
+            except Exception:
+                pass
         now = time.time()
-        
         if key not in self._requests:
             return limit
-        
         self._requests[key] = [
-            req_time for req_time in self._requests[key]
-            if now - req_time < window
+            t for t in self._requests[key] if now - t < window
         ]
-        
         return max(0, limit - len(self._requests[key]))
+    
+    def increment(self, key: str, window: int) -> int:
+        """Increment counter and return current count (for lockout tracking)."""
+        r = self._get_redis()
+        if r:
+            try:
+                now = time.time()
+                window_start = now - window
+                r.zremrangebyscore(key, 0, window_start)
+                r.zadd(key, {str(now): now})
+                r.expire(key, window)
+                return r.zcard(key)
+            except Exception:
+                pass
+        now = time.time()
+        if key not in self._requests:
+            self._requests[key] = []
+        self._requests[key] = [t for t in self._requests[key] if now - t < window]
+        self._requests[key].append(now)
+        return len(self._requests[key])
 
 
 # Global rate limiter instance

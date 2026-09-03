@@ -3,8 +3,6 @@ import * as api from '../lib/api';
 import {
   EditIcon,
   TrashIcon,
-  PinIcon,
-  FolderPlusIcon,
   SearchIcon,
   FolderIcon,
   SparklesIcon,
@@ -42,32 +40,22 @@ interface Props {
   onSignOut: () => void;
 }
 
-function folderOf(c: api.Conversation): string {
-  const settings = (c.settings ?? {}) as { folder?: string };
-  return (settings.folder ?? '').trim();
-}
-
 function ConversationRow({
   c,
   active,
   onSelect,
   onRename,
   onDelete,
-  onPin,
-  onFolder,
 }: {
   c: api.Conversation;
   active: boolean;
   onSelect: (id: string) => void;
   onRename: (id: string, title: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onPin: (id: string, pinned: boolean) => Promise<void>;
-  onFolder: (id: string, folder: string | null) => Promise<void>;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [renameText, setRenameText] = useState('');
-  const [folderOpen, setFolderOpen] = useState(false);
-  const [folderText, setFolderText] = useState(folderOf(c));
+  const [hovered, setHovered] = useState(false);
 
   const commitRename = async () => {
     const title = renameText.trim();
@@ -75,17 +63,15 @@ function ConversationRow({
     if (title) await onRename(c.id, title);
   };
 
-  const commitFolder = async () => {
-    const name = folderText.trim();
-    setFolderOpen(false);
-    await onFolder(c.id, name || null);
-  };
-
   return (
-    <div className={`conversation-item${active ? ' active' : ''}`}>
+    <div
+      className={`chatgpt-conv-item${active ? ' active' : ''}`}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       {renaming ? (
         <input
-          className="conversation-rename"
+          className="chatgpt-conv-rename"
           autoFocus
           value={renameText}
           onChange={(e) => setRenameText(e.target.value)}
@@ -98,79 +84,31 @@ function ConversationRow({
       ) : (
         <>
           <button
-            className="conversation-main"
+            className="chatgpt-conv-main"
             onClick={() => onSelect(c.id)}
             title={c.title}
           >
-            <span className="conversation-dot" />
-            <span className="conversation-title">{c.title || 'Untitled'}</span>
+            <span className="chatgpt-conv-title">{c.title || 'Untitled'}</span>
           </button>
-          <div className="conversation-actions">
-            <button
-              className={`conv-action${c.is_pinned ? ' on' : ''}`}
-              title={c.is_pinned ? 'Unpin' : 'Pin'}
-              onClick={() => onPin(c.id, !c.is_pinned)}
-            >
-              <PinIcon />
-            </button>
-            <button
-              className="conv-action"
-              title="Move to folder"
-              onClick={() => {
-                setFolderText(folderOf(c));
-                setFolderOpen((o) => !o);
-              }}
-            >
-              <FolderPlusIcon />
-            </button>
-            <button
-              className="conv-action"
-              title="Rename"
-              onClick={() => {
-                setRenameText(c.title);
-                setRenaming(true);
-              }}
-            >
-              <EditIcon />
-            </button>
-            <button
-              className="conv-action danger"
-              title="Delete"
-              onClick={() => onDelete(c.id)}
-            >
-              <TrashIcon />
-            </button>
-          </div>
-          {folderOpen && (
-            <div className="folder-popover" onClick={(e) => e.stopPropagation()}>
-              <input
-                className="folder-input"
-                autoFocus
-                placeholder="Folder name…"
-                value={folderText}
-                onChange={(e) => setFolderText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitFolder();
-                  if (e.key === 'Escape') setFolderOpen(false);
+          {(hovered || active) && (
+            <div className="chatgpt-conv-actions">
+              <button
+                className="chatgpt-conv-action"
+                title="Rename"
+                onClick={() => {
+                  setRenameText(c.title);
+                  setRenaming(true);
                 }}
-              />
-              <div className="folder-actions">
-                <button className="folder-save" onClick={commitFolder}>
-                  Save
-                </button>
-                {folderText && (
-                  <button
-                    className="folder-clear"
-                    onClick={() => {
-                      setFolderText('');
-                      setFolderOpen(false);
-                      onFolder(c.id, null);
-                    }}
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
+              >
+                <EditIcon />
+              </button>
+              <button
+                className="chatgpt-conv-action danger"
+                title="Delete"
+                onClick={() => onDelete(c.id)}
+              >
+                <TrashIcon />
+              </button>
             </div>
           )}
         </>
@@ -186,8 +124,8 @@ export default function Sidebar({
   onNew,
   onRename,
   onDelete,
-  onPin,
-  onFolder,
+  onPin: _onPin,
+  onFolder: _onFolder,
   user,
   theme,
   canExport,
@@ -206,6 +144,7 @@ export default function Sidebar({
 }: Props) {
   const [filter, setFilter] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -227,190 +166,120 @@ export default function Sidebar({
   const visible = conversations.filter((c) =>
     c.title.toLowerCase().includes(filter.toLowerCase()),
   );
-  const pinned = visible.filter((c) => c.is_pinned);
-  const unpinned = visible.filter((c) => !c.is_pinned);
-
-  const folders: { name: string; items: api.Conversation[] }[] = [];
-  const folderless: api.Conversation[] = [];
-  for (const c of unpinned) {
-    const f = folderOf(c);
-    if (!f) {
-      folderless.push(c);
-      continue;
-    }
-    const existing = folders.find((g) => g.name === f);
-    if (existing) existing.items.push(c);
-    else folders.push({ name: f, items: [c] });
-  }
-
-  const renderRow = (c: api.Conversation) => (
-    <ConversationRow
-      key={c.id}
-      c={c}
-      active={c.id === activeId}
-      onSelect={onSelect}
-      onRename={onRename}
-      onDelete={onDelete}
-      onPin={onPin}
-      onFolder={onFolder}
-    />
-  );
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-header">
-        <span className="sidebar-title">Conversations</span>
-        <button className="new-chat" onClick={onNew} title="New conversation">
-          +
+    <aside className={`chatgpt-sidebar${collapsed ? ' collapsed' : ''}`}>
+      {/* Header */}
+      <div className="chatgpt-sidebar-header">
+        {!collapsed && (
+          <span className="chatgpt-brand">Nova AI</span>
+        )}
+        <button
+          className="chatgpt-sidebar-toggle"
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12h18M3 6h18M3 18h18" />
+          </svg>
         </button>
       </div>
 
-      <input
-        className="sidebar-search"
-        placeholder="Search…"
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-      />
+      {/* New chat button */}
+      <button className="chatgpt-new-chat" onClick={onNew}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+        {!collapsed && <span>New chat</span>}
+      </button>
 
-      <nav className="conversation-list">
-        {visible.length === 0 && (
-          <div className="conversation-empty">No conversations yet</div>
-        )}
+      {/* Search */}
+      {!collapsed && (
+        <div className="chatgpt-search-wrap">
+          <SearchIcon />
+          <input
+            className="chatgpt-search"
+            placeholder="Search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        </div>
+      )}
 
-        {pinned.length > 0 && (
-          <>
-            <div className="conversation-group-label">Pinned</div>
-            {pinned.map(renderRow)}
-          </>
-        )}
+      {/* Conversation list */}
+      {!collapsed && (
+        <div className="chatgpt-conv-list">
+          {visible.length === 0 && (
+            <div className="chatgpt-conv-empty">No conversations yet</div>
+          )}
+          {visible.map((c) => (
+            <ConversationRow
+              key={c.id}
+              c={c}
+              active={c.id === activeId}
+              onSelect={onSelect}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
 
-        {folders.map((g) => (
-          <div key={g.name}>
-            <div className="conversation-group-label">{g.name}</div>
-            {g.items.map(renderRow)}
-          </div>
-        ))}
-
-        {pinned.length > 0 && (
-          <div className="conversation-group-label">All conversations</div>
-        )}
-        {folderless.map(renderRow)}
-      </nav>
-
-      <div className="sidebar-footer" ref={menuRef}>
+      {/* Footer - user profile */}
+      <div className="chatgpt-sidebar-footer" ref={menuRef}>
         <button
-          type="button"
-          className="user-avatar sidebar-avatar"
+          className="chatgpt-user-btn"
           onClick={() => setMenuOpen((o) => !o)}
-          title="Menu"
         >
-          {(user?.full_name ?? user?.email ?? '?').charAt(0).toUpperCase()}
-        </button>
-        {menuOpen && (
-          <div className="avatar-menu sidebar-avatar-menu">
-            <div className="avatar-menu-head">
-              <span className="avatar-menu-name">
+          <div className="chatgpt-user-avatar">
+            {(user?.full_name ?? user?.email ?? '?').charAt(0).toUpperCase()}
+          </div>
+          {!collapsed && (
+            <div className="chatgpt-user-info">
+              <span className="chatgpt-user-name">
                 {user?.full_name ?? user?.email ?? 'User'}
               </span>
-              <span className="avatar-menu-sub">{user?.email}</span>
+              <span className="chatgpt-user-plan">Free</span>
             </div>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onSearch();
-              }}
-            >
-              <SearchIcon />
-              Search
+          )}
+        </button>
+
+        {menuOpen && (
+          <div className="chatgpt-menu">
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onSearch(); }}>
+              <SearchIcon /> Search
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onProjects();
-              }}
-            >
-              <FolderIcon />
-              Projects
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onProjects(); }}>
+              <FolderIcon /> Projects
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onExport();
-              }}
-              disabled={!canExport}
-            >
-              <ShareIcon />
-              Export
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onExport(); }} disabled={!canExport}>
+              <ShareIcon /> Export
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onSummarize();
-              }}
-              disabled={!canSummarize}
-            >
-              <SparklesIcon />
-              {summarizing ? 'Summarizing…' : 'Summarize'}
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onSummarize(); }} disabled={!canSummarize}>
+              <SparklesIcon /> {summarizing ? 'Summarizing…' : 'Summarize'}
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onShare();
-              }}
-              disabled={!canExport}
-            >
-              <ShareIcon />
-              Share
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onShare(); }} disabled={!canExport}>
+              <ShareIcon /> Share
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onBilling();
-              }}
-            >
-              <BotIcon />
-              Billing
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onBilling(); }}>
+              <BotIcon /> Billing
             </button>
             {user?.is_superuser && (
-              <button
-                className="avatar-menu-item"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onAdmin();
-                }}
-              >
-                <ShieldIcon />
-                Admin
+              <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onAdmin(); }}>
+                <ShieldIcon /> Admin
               </button>
             )}
-            <div className="avatar-menu-divider" />
-            <button
-              className="avatar-menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                onSettings();
-              }}
-            >
-              <GearIcon />
-              Settings
+            <div className="chatgpt-menu-divider" />
+            <button className="chatgpt-menu-item" onClick={() => { setMenuOpen(false); onSettings(); }}>
+              <GearIcon /> Settings
             </button>
-            <button
-              className="avatar-menu-item"
-              onClick={onToggleTheme}
-            >
+            <button className="chatgpt-menu-item" onClick={onToggleTheme}>
               {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
               {theme === 'dark' ? 'Light mode' : 'Dark mode'}
             </button>
-            <div className="avatar-menu-divider" />
-            <button className="avatar-menu-item danger" onClick={onSignOut}>
-              <ShareIcon />
-              Sign out
+            <div className="chatgpt-menu-divider" />
+            <button className="chatgpt-menu-item danger" onClick={onSignOut}>
+              <ShareIcon /> Sign out
             </button>
           </div>
         )}

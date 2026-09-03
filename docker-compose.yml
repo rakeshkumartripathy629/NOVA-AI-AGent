@@ -2,25 +2,38 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: novaai
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ChangeMe_In_Production_2024!}
       POSTGRES_DB: nova_ai
+    ports:
+      - "127.0.0.1:5433:5432"  # Bound to localhost only
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d nova_ai"]
+      test: ["CMD-SHELL", "pg_isready -U novaai -d nova_ai"]
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   redis:
     image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"  # Bound to localhost only
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"  # Bound to localhost only
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 
@@ -28,19 +41,23 @@ services:
     build: ./backend
     command: ["python", "mcp_server.py"]
     ports:
-      - "9002:9002"
+      - "127.0.0.1:9002:9002"  # Bound to localhost only
 
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-novaai_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-ChangeMe_In_Production_2024!}
     volumes:
       - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"  # Bound to localhost only
+      - "127.0.0.1:9001:9001"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   backend:
     build: ./backend
@@ -48,28 +65,28 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/nova_ai
+      DATABASE_URL: postgresql+asyncpg://novaai:${DB_PASSWORD:-ChangeMe_In_Production_2024!}@db:5432/nova_ai
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       QDRANT_URL: http://qdrant:6333
       STORAGE_ENDPOINT: http://minio:9000
-      STORAGE_ACCESS_KEY: minioadmin
-      STORAGE_SECRET_KEY: minioadmin
-      FRONTEND_URL: http://localhost:3000
-      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-novaai_admin}
+      STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-ChangeMe_In_Production_2024!}
+      FRONTEND_URL: http://localhost:5173
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # Bound to localhost only
 
   frontend:
     build: ./frontend
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"  # Bound to localhost only
 
 volumes:
   pgdata:

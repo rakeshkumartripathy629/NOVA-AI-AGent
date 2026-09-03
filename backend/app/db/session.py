@@ -36,16 +36,14 @@ def _build_engine() -> AsyncEngine:
         "pool_pre_ping": True,
         "pool_recycle": settings.DB_POOL_RECYCLE,
     }
-    if settings.is_production and not settings.TESTING:
-        kwargs.update(
-            {
-                "pool_size": settings.DB_POOL_SIZE,
-                "max_overflow": settings.DB_MAX_OVERFLOW,
-                "pool_timeout": settings.DB_POOL_TIMEOUT,
-            }
-        )
-    else:
-        kwargs["poolclass"] = NullPool
+    # Always use connection pooling for speed (even in dev)
+    kwargs.update(
+        {
+            "pool_size": settings.DB_POOL_SIZE if settings.is_production else 5,
+            "max_overflow": settings.DB_MAX_OVERFLOW if settings.is_production else 10,
+            "pool_timeout": settings.DB_POOL_TIMEOUT,
+        }
+    )
     return create_async_engine(settings.DATABASE_URL, **kwargs)
 
 

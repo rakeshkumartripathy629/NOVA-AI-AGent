@@ -41,3 +41,9 @@ tmp/
 
 # Local user-uploaded files — NEVER commit
 backend/storage_local/
+
+# Freebuff dev files
+.freebuff/
+
+# Windows path artifacts
+frontend/C*

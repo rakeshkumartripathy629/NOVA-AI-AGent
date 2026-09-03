@@ -11,14 +11,29 @@ export interface ProviderOption {
 
 export const PROVIDERS: ProviderOption[] = [
   {
-    id: 'groq',
-    label: 'Groq',
+    id: 'gemini',
+    label: '✦ Google Gemini (Free)',
     models: [
-      { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
-      { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B' },
+      { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash' },
+      { id: 'gemini-3.6-pro', name: 'Gemini 3.6 Pro' },
+    ],
+  },
+  {
+    id: 'groq',
+    label: '⚡ Groq (Free)',
+    models: [
       { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B' },
+      { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
       { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
       { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
+    ],
+  },
+  {
+    id: 'cerebras',
+    label: '🧠 Cerebras (Free)',
+    models: [
+      { id: 'gpt-oss-120b', name: 'GPT-OSS 120B' },
+      { id: 'gemma-4-31b', name: 'Gemma 4 31B' },
     ],
   },
   {
@@ -41,15 +56,6 @@ export const PROVIDERS: ProviderOption[] = [
     ],
   },
   {
-    id: 'gemini',
-    label: 'Google Gemini',
-    models: [
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-      { id: 'gemini-flash-latest', name: 'Gemini Flash' },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
-    ],
-  },
-  {
     id: 'openrouter',
     label: 'OpenRouter',
     models: [
@@ -60,8 +66,8 @@ export const PROVIDERS: ProviderOption[] = [
   },
 ];
 
-export const DEFAULT_PROVIDER = 'groq';
-export const DEFAULT_MODEL = 'openai/gpt-oss-120b';
+export const DEFAULT_PROVIDER = 'gemini';
+export const DEFAULT_MODEL = 'gemini-3.6-flash';
 
 export function modelName(providerId: string, modelId: string): string {
   const provider = PROVIDERS.find((p) => p.id === providerId);

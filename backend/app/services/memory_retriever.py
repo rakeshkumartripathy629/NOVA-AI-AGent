@@ -88,6 +88,24 @@ async def retrieve_memories(
     if not query:
         return []
 
+    # Fast path: if user has no memories, skip embedding entirely
+    _no_mem_cache_key = f"nova:mem:count:{user_id}"
+    try:
+        from app.core.config import settings as _s
+        async with get_db_context() as db:
+            cnt_result = await db.execute(
+                select(MemoryItem.id).where(
+                    MemoryItem.user_id == user_id,
+                    MemoryItem.is_deleted.is_(False),
+                    MemoryItem.superseded_by_id.is_(None),
+                ).limit(1)
+            )
+            has_any = cnt_result.scalar_one_or_none() is not None
+        if not has_any:
+            return []
+    except Exception:
+        pass  # continue anyway
+
     try:
         [qvec] = await embedding_service.embed([query])
     except Exception as exc:  # noqa: BLE001

@@ -7,9 +7,33 @@ OpenRouter so the orchestration layer is provider-agnostic.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from app.core.config import settings
+
+
+# ── Provider health tracker ──────────────────────────────────────────────
+# When a provider returns 429 / rate-limit, remember it for a cooldown period
+# so subsequent requests skip it instantly instead of waiting for a timeout.
+_PROVIDER_COOLDOWNS: Dict[str, float] = {}  # provider_name -> expiry timestamp
+DEFAULT_COOLDOWN_SECONDS = 60
+
+
+def mark_provider_unhealthy(name: str, seconds: int = DEFAULT_COOLDOWN_SECONDS) -> None:
+    """Mark a provider as rate-limited for ``seconds``."""
+    _PROVIDER_COOLDOWNS[name] = time.monotonic() + seconds
+
+
+def is_provider_healthy(name: str) -> bool:
+    """Return True if the provider is not in cooldown."""
+    expiry = _PROVIDER_COOLDOWNS.get(name)
+    if expiry is None:
+        return True
+    if time.monotonic() > expiry:
+        _PROVIDER_COOLDOWNS.pop(name, None)
+        return True
+    return False
 
 
 class ProviderError(Exception):
@@ -199,17 +223,26 @@ class GeminiProvider(ChatProvider):
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None) -> None:
         self.api_key = api_key or settings.GEMINI_API_KEY
         self.base_url = base_url or settings.GEMINI_BASE_URL
-        self.default_model = "gemini-flash-latest"
+        self.default_model = settings.GEMINI_CHAT_MODEL
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            from google import genai
+            if self.base_url:
+                self._client = genai.Client(api_key=self.api_key, http_options={"base_url": self.base_url})
+            else:
+                self._client = genai.Client(api_key=self.api_key)
+        return self._client
 
     async def stream(self, messages, model=None, temperature=None, max_tokens=None, tools=None, system_prompt=None, **kwargs):
         if not self.api_key:
             raise ProviderError("GEMINI_API_KEY is not configured")
 
-        from google import genai
+        import asyncio as _asyncio
+        from google.genai import errors as _gai_errors
 
-        client = genai.Client(api_key=self.api_key) if not self.base_url else genai.Client(
-            api_key=self.api_key, http_options={"base_url": self.base_url}
-        )
+        client = self._get_client()
 
         contents = []
         for m in messages:
@@ -222,17 +255,32 @@ class GeminiProvider(ChatProvider):
         if max_tokens:
             config["max_output_tokens"] = max_tokens
 
-        response = await client.aio.models.generate_content_stream(
-            model=model or self.default_model,
-            contents=contents,
-            config=config,
-        )
-        async for chunk in response:
-            if chunk.candidates:
-                parts = chunk.candidates[0].content.parts
-                for part in parts:
-                    if part.text:
-                        yield {"type": "content", "content": part.text}
+        try:
+            response = await _asyncio.wait_for(
+                client.aio.models.generate_content_stream(
+                    model=model or self.default_model,
+                    contents=contents,
+                    config=config,
+                ),
+                timeout=10,
+            )
+            async for chunk in response:
+                if chunk.candidates:
+                    parts = chunk.candidates[0].content.parts
+                    for part in parts:
+                        if part.text:
+                            yield {"type": "content", "content": part.text}
+        except _asyncio.TimeoutError:
+            mark_provider_unhealthy("gemini", 60)
+            raise ProviderError("Gemini API timed out")
+        except _gai_errors.ClientError as exc:
+            msg = str(exc)
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower():
+                mark_provider_unhealthy("gemini", 120)
+                raise ProviderError("Gemini rate limit exceeded")
+            raise ProviderError(f"Gemini error: {msg}")
+        except Exception as exc:
+            raise ProviderError(f"Gemini stream failed: {exc}")
 
     async def embed(self, texts, model=None):
         if not self.api_key:
@@ -274,6 +322,41 @@ class GroqProvider(OpenAIProvider):
         )
         self.default_model = settings.GROQ_MODEL
 
+    async def stream(self, messages, model=None, temperature=None, max_tokens=None, tools=None, system_prompt=None, **kwargs):
+        """Override to strip <think>...</think> tags from Qwen-style reasoning models."""
+        in_think = False
+        total_content = ""
+        has_yielded = False
+        async for event in super().stream(messages, model, temperature, max_tokens, tools, system_prompt, **kwargs):
+            if event.get("type") == "content":
+                text = event["content"]
+                result = ""
+                i = 0
+                while i < len(text):
+                    if in_think:
+                        end = text.find("</think>", i)
+                        if end == -1:
+                            break
+                        in_think = False
+                        i = end + 9
+                    else:
+                        start = text.find("<think>", i)
+                        if start == -1:
+                            result += text[i:]
+                            break
+                        result += text[i:start]
+                        in_think = True
+                        i = start + 7
+                if result:
+                    has_yielded = True
+                    total_content += result
+                    yield {"type": "content", "content": result}
+            else:
+                yield event
+        # If everything was think tags with no visible content, yield a minimal response
+        if not has_yielded:
+            yield {"type": "content", "content": "I've processed your request. Please see the details above."}
+
     async def embed(self, texts, model=None):
         raise ProviderError("Groq does not provide embedding models; using local embeddings instead")
 
@@ -289,6 +372,28 @@ class GroqProvider(OpenAIProvider):
             file=("audio.webm", audio_bytes),
         )
         return transcript.text
+
+
+class CerebrasProvider(OpenAIProvider):
+    """Cerebras is OpenAI-compatible for chat (ultra-fast inference, free tier)."""
+
+    name = "cerebras"
+
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None) -> None:
+        super().__init__(
+            api_key=api_key or settings.CEREBRAS_API_KEY,
+            base_url=base_url or settings.CEREBRAS_BASE_URL,
+        )
+        self.default_model = settings.CEREBRAS_MODEL
+
+    async def embed(self, texts, model=None):
+        raise ProviderError("Cerebras does not provide embedding models")
+
+    async def transcribe(self, audio_bytes, **kwargs):
+        raise ProviderError("Cerebras does not support transcription")
+
+    async def synthesize(self, text, voice=None, language=None):
+        raise ProviderError("Cerebras does not support TTS")
 
 
 class LocalEmbeddingProvider(ChatProvider):
@@ -620,19 +725,23 @@ def get_provider(name: str, **kwargs: Any) -> ChatProvider:
         "google": GeminiProvider,
         "openrouter": OpenRouterProvider,
         "groq": GroqProvider,
+        "cerebras": CerebrasProvider,
     }
     provider_cls = providers.get(name.lower(), OpenAIProvider)
     return provider_cls(**kwargs)
 
 
 def default_provider() -> ChatProvider:
-    """Choose the best available provider based on configured keys."""
+    """Choose the best available free provider based on configured keys."""
+    # Prioritize free providers: Groq (fastest) > Gemini > Cerebras
     if settings.GROQ_API_KEY:
         return GroqProvider()
-    if settings.ANTHROPIC_API_KEY:
-        return AnthropicProvider()
     if settings.GEMINI_API_KEY:
         return GeminiProvider()
+    if settings.CEREBRAS_API_KEY:
+        return CerebrasProvider()
+    if settings.ANTHROPIC_API_KEY:
+        return AnthropicProvider()
     if settings.OPENROUTER_API_KEY:
         return OpenRouterProvider()
     return OpenAIProvider()

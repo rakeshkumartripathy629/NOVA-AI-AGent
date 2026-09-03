@@ -70,6 +70,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Check database connection
     if await check_db_connection():
         logger.info("Database connection OK")
+        # Warm up the connection pool so first user requests are fast
+        try:
+            from app.db.session import get_session_factory
+            from sqlalchemy import text
+            factory = get_session_factory()
+            for _ in range(5):
+                async with factory() as warmup_db:
+                    await warmup_db.execute(text('SELECT 1'))
+            logger.info("DB pool warmed up (5 connections ready)")
+        except Exception:  # noqa: BLE001
+            pass
     else:
         logger.warning("Database connection failed")
 
@@ -186,6 +197,25 @@ def add_middleware(app: FastAPI) -> None:
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
         response.headers["X-Request-ID"] = request_id
+        # Security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' ws: wss: http://localhost:* https:; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        if settings.is_production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
         
         # Record metrics
         REQUEST_COUNT.labels(
@@ -342,6 +372,20 @@ def add_routes(app: FastAPI) -> None:
     @app.get("/health/live", tags=["Health"])
     async def liveness_check():
         return {"status": "alive"}
+    
+    @app.get("/health/detail", tags=["Health"])
+    async def detailed_health():
+        """Full health check of all dependencies."""
+        from app.core.health import full_health_check
+        result = await full_health_check()
+        status_code = 200 if result["status"] == "healthy" else 503
+        return JSONResponse(status_code=status_code, content=result)
+    
+    @app.get("/health/circuit-breakers", tags=["Health"])
+    async def circuit_breakers():
+        """Status of all circuit breakers."""
+        from app.core.circuit_breaker import all_breakers_status
+        return all_breakers_status()
     
     # API documentation (custom)
     if not settings.is_production:

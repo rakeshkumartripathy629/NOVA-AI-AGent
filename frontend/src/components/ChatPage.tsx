@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
+import { runCode } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "./Sidebar";
 import BillingModal from "./BillingModal";
@@ -18,9 +19,7 @@ import {
   ChevronDownIcon,
   FolderIcon,
   GlobeIcon,
-  ImageIcon,
   MicIcon,
-  PaperclipIcon,
   SendIcon,
   SparklesIcon,
   SpeakerIcon,
@@ -88,7 +87,7 @@ export default function ChatPage() {
   const [selectedKb, setSelectedKb] = useState<string>("");
   const [kbMenuOpen, setKbMenuOpen] = useState(false);
   const [webSearch, setWebSearch] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState(false); // eslint-disable-line
   const [editId, setEditId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [toast, setToast] = useState("");
@@ -120,7 +119,7 @@ export default function ChatPage() {
   const speakCancelledRef = useRef(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const imageFileRef = useRef<File | null>(null);
-  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionBusy, setVisionBusy] = useState(false); // eslint-disable-line
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [reactions, setReactions] = useState<Record<string, string>>(() => {
     try {
@@ -137,8 +136,8 @@ export default function ChatPage() {
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     localStorage.getItem("nova_theme") === "light" ? "light" : "dark",
   );
-  const [notifications, setNotifications] = useState<api.Notification[]>([]);
-  const [unread, setUnread] = useState(0);
+  const [notifications, setNotifications] = useState<api.Notification[]>([]); // eslint-disable-line
+  const [unread, setUnread] = useState(0); // eslint-disable-line
   const [notifOpen, setNotifOpen] = useState(false);
 
   const ACTIVE_KEY = "nova_active_conversation";
@@ -197,6 +196,27 @@ export default function ChatPage() {
       JSON.stringify({ selectedKb, webSearch }),
     );
   }, [selectedKb, webSearch]);
+
+  // Code execution handler
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.lang || !detail?.code) return;
+      showToast("Running " + detail.lang + "...");
+      try {
+        const result = await runCode(detail.lang, detail.code);
+        if (result.error) {
+          showToast("Error: " + result.error);
+        } else {
+          showToast("Output: " + (result.output || "(no output)") + " (" + result.execution_time.toFixed(2) + "s)");
+        }
+      } catch (err) {
+        showToast("Error: " + (err instanceof Error ? err.message : "Execution failed"));
+      }
+    };
+    window.addEventListener("run-code", handler);
+    return () => window.removeEventListener("run-code", handler);
+  }, []);
 
   useEffect(() => {
     if (!activeId) return;
@@ -699,7 +719,7 @@ export default function ChatPage() {
     }
   };
 
-  const toggleNotifications = async () => {
+  const toggleNotifications = async () => { // eslint-disable-line
     const next = !notifOpen;
     setNotifOpen(next);
     if (next) {
@@ -933,58 +953,23 @@ export default function ChatPage() {
         onSignOut={handleSignOut}
       />
 
-      <main className="chat-main">
-        <header className="chat-header">
-          <div className="chat-header-title">
-            {activeId
-              ? (conversations.find((c) => c.id === activeId)?.title ??
-                "Conversation")
-              : "Nova AI"}
-          </div>
-          <div className="chat-header-user">
-            <span className="org-name">
-              {organization?.name ?? "No organization"}
-            </span>
-            <div className="notif-wrap">
-              <button
-                className={`billing-btn${notifOpen ? " active" : ""}`}
-                onClick={toggleNotifications}
-                title="Notifications"
-              >
-                <BellIcon />
-                {unread > 0 && <span className="notif-badge">{unread}</span>}
-              </button>
-              {notifOpen && (
-                <div className="notif-dropdown">
-                  <div className="notif-head">Notifications</div>
-                  {notifications.length === 0 && (
-                    <div className="conversation-empty">No notifications</div>
-                  )}
-                  {notifications.map((n) => (
-                    <div className={`notif-item ${n.status}`} key={n.id}>
-                      <div className="notif-title">{n.title}</div>
-                      <div className="notif-msg">{n.message}</div>
-                      <div className="notif-time">
-                        {new Date(n.created_at).toLocaleString()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+      <main className="chatgpt-main">
+        <header className="chatgpt-header">
+          <div className="chatgpt-tabs">
+            <button className="chatgpt-tab active">Chat</button>
+            <button className="chatgpt-tab">✨ Work</button>
           </div>
         </header>
 
         <div className="message-scroll" ref={scrollRef}>
           {messages.length === 0 && (
-            <div className="message-welcome">
-              <h2>Welcome to Nova AI</h2>
-              <p>Start a new conversation or pick one from the sidebar.</p>
-              <div className="starter-prompts">
+            <div className="chatgpt-greeting">
+              <h1>What's on the agenda today?</h1>
+              <div className="chatgpt-starters">
                 {STARTER_PROMPTS.map((p) => (
                   <button
                     key={p}
-                    className="starter-chip"
+                    className="chatgpt-starter"
                     onClick={() => sendText(p)}
                     disabled={busy}
                   >
@@ -1190,8 +1175,8 @@ export default function ChatPage() {
           </button>
         )}
 
-        <form className="composer" onSubmit={handleSubmit}>
-          <div className="composer-box">
+        <form className="chatgpt-composer" onSubmit={handleSubmit}>
+          <div className="chatgpt-input-wrap">
             {imagePreview && (
               <div className="image-preview">
                 <img src={imagePreview} alt="Attachment preview" />
@@ -1207,111 +1192,75 @@ export default function ChatPage() {
                 </button>
               </div>
             )}
+            <button
+              type="button"
+              className="chatgpt-attach-btn"
+              onClick={handleAttachClick}
+              title="Attach file"
+            >
+              <span style={{fontSize: '20px', lineHeight: 1}}>+</span>
+            </button>
             <input
-              className="composer-input"
+              className="chatgpt-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                activeId ? "Ask Nova anything…" : "Create a conversation first"
-              }
+              placeholder="Ask Nova anything…"
               disabled={!activeId || busy}
             />
-            <div className="composer-box-footer">
-              <div className="composer-icons">
-                <button
-                  type="button"
-                  className={`icon-btn model-picker-btn${modelMenuOpen ? " active" : ""}`}
-                  title="Choose model"
-                  onClick={() => setModelMenuOpen((o) => !o)}
-                >
-                  <SparklesIcon />
-                  <span className="kb-chip">{modelName(provider, model)}</span>
-                </button>
-                {modelMenuOpen && (
-                  <div className="kb-menu model-menu">
-                    {PROVIDERS.map((p) => (
-                      <div key={p.id} className="model-menu-group">
-                        <div className="model-menu-label">{p.label}</div>
-                        {p.models.map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className={`kb-menu-item${provider === p.id && model === m.id ? " selected" : ""}`}
-                            onClick={() => {
-                              setProvider(p.id);
-                              setModel(m.id);
-                              setModelMenuOpen(false);
-                            }}
-                          >
-                            {m.name}
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  className={`icon-btn${agentsMenuOpen ? " active" : ""}${selectedAgent ? " active" : ""}`}
-                  title="Chat with an agent"
-                  onClick={() => setAgentsMenuOpen((o) => !o)}
-                >
-                  <BotIcon />
-                  {selectedAgentName && (
-                    <span className="kb-chip">{selectedAgentName}</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`icon-btn${kbMenuOpen ? " active" : ""}`}
-                  title="Knowledge base"
-                  onClick={() => setKbMenuOpen((o) => !o)}
-                >
-                  <FolderIcon />
-                  {selectedKbName && (
-                    <span className="kb-chip">{selectedKbName}</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`icon-btn${webSearch ? " active" : ""}`}
-                  title="Live web search"
-                  onClick={() => setWebSearch((v) => !v)}
-                >
-                  <GlobeIcon />
-                </button>
-                <button
-                  type="button"
-                  className={`icon-btn${recording ? " recording" : ""}${transcribing ? " busy" : ""}`}
-                  title={recording ? "Stop recording" : "Speak your message"}
-                  disabled={transcribing}
-                  onClick={toggleRecording}
-                >
-                  <MicIcon />
-                </button>
-                <button
-                  type="button"
-                  className={`icon-btn${uploading ? " busy" : ""}`}
-                  title="Upload a PDF — Nova will ask what details you need"
-                  disabled={uploading}
-                  onClick={handleAttachClick}
-                >
-                  <PaperclipIcon />
-                </button>
-                <button
-                  type="button"
-                  className={`icon-btn${imagePreview ? " active" : ""}${visionBusy ? " busy" : ""}`}
-                  title="Attach an image to analyze"
-                  disabled={visionBusy}
-                  onClick={() => imageInputRef.current?.click()}
-                >
-                  <ImageIcon />
-                </button>
-              </div>
+            <div className="chatgpt-input-icons">
+              <button
+                type="button"
+                className={`chatgpt-icon-btn${modelMenuOpen ? " active" : ""}`}
+                title="Choose model"
+                onClick={() => setModelMenuOpen((o) => !o)}
+              >
+                <SparklesIcon />
+              </button>
+              {modelMenuOpen && (
+                <div className="chatgpt-model-menu">
+                  {PROVIDERS.map((p) => (
+                    <div key={p.id} className="model-menu-group">
+                      <div className="model-menu-label">{p.label}</div>
+                      {p.models.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          className={`kb-menu-item${provider === p.id && model === m.id ? " selected" : ""}`}
+                          onClick={() => {
+                            setProvider(p.id);
+                            setModel(m.id);
+                            setModelMenuOpen(false);
+                          }}
+                        >
+                          {m.name}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                className={`chatgpt-icon-btn${webSearch ? " active" : ""}`}
+                title="Live web search"
+                onClick={() => setWebSearch((v) => !v)}
+              >
+                <GlobeIcon />
+              </button>
+              <button
+                type="button"
+                className={`chatgpt-icon-btn${recording ? " recording" : ""}`}
+                title={recording ? "Stop recording" : "Speak your message"}
+                disabled={transcribing}
+                onClick={toggleRecording}
+              >
+                <MicIcon />
+              </button>
+
               {busy ? (
                 <button
                   type="button"
-                  className="composer-stop"
+                  className="chatgpt-stop-btn"
                   onClick={handleStop}
                 >
                   Stop
@@ -1319,7 +1268,7 @@ export default function ChatPage() {
               ) : (
                 <button
                   type="submit"
-                  className="composer-send"
+                  className="chatgpt-send-btn"
                   disabled={!activeId || (!input.trim() && !imagePreview)}
                   title="Send"
                 >

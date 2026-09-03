@@ -196,6 +196,19 @@ function parseBlocks(src: string): ReactNode[] {
             >
               Copy
             </button>
+            {(["python","javascript"].includes(lang)) && (
+              <button
+                className="code-run-btn"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const codeStr = buf.join("\n");
+                  window.dispatchEvent(new CustomEvent("run-code", { detail: { lang, code: codeStr } }));
+                }}
+              >
+                &#9654; Run
+              </button>
+            )}
           </div>
           <pre className="code-block">
             <code>{highlightCode(buf.join("\n"))}</code>

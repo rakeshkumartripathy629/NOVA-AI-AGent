@@ -41,7 +41,7 @@ def _direct_url(href: str) -> str:
 async def _search_duckduckgo(query: str, max_results: int) -> List[Dict[str, str]]:
     import httpx
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=8) as client:
         resp = await client.get(
             "https://html.duckduckgo.com/html/",
             params={"q": query},
@@ -82,8 +82,7 @@ async def _search_serpapi(query: str, max_results: int) -> List[Dict[str, str]]:
         return []
 
     import httpx
-
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=8) as client:
         resp = await client.get(
             "https://serpapi.com/search",
             params={
@@ -128,7 +127,7 @@ async def _search_duckduckgo_youtube(query: str, max_results: int) -> List[Dict[
     """Search YouTube specifically via DuckDuckGo (site:youtube.com)."""
     import httpx
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=8) as client:
         resp = await client.get(
             "https://html.duckduckgo.com/html/",
             params={"q": f"site:youtube.com {query}"},
@@ -177,14 +176,22 @@ def _merge_dedupe(
 
 
 async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """Run a live web search and return (context_text, citations)."""
+    """Run a live web search and return (context_text, citations).
+
+    Runs web and video searches in parallel for speed. Video results are
+    limited to 3 to avoid YouTube spam dominating the results.
+    """
+    import asyncio
+
     engine = settings.SEARCH_ENGINE.lower()
     max_results = settings.SEARCH_MAX_RESULTS
 
     try:
         if engine == "duckduckgo":
-            results = await _search_duckduckgo(query, max_results)
-            video_results = await _search_duckduckgo_youtube(query, max_results)
+            # Run web and video search in parallel for speed
+            web_task = asyncio.create_task(_search_duckduckgo(query, max_results))
+            video_task = asyncio.create_task(_search_duckduckgo_youtube(query, 2))
+            results, video_results = await asyncio.gather(web_task, video_task)
         else:  # serpapi, google, bing
             results = await _search_serpapi(query, max_results)
             video_results = []

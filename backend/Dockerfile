@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install only essential system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -18,6 +19,12 @@ COPY alembic.ini ./
 COPY mcp_server.py ./
 
 RUN pip install --upgrade pip && pip install .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 

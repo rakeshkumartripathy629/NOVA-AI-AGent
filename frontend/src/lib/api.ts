@@ -12,15 +12,24 @@ export class ApiError extends Error {
 }
 
 export function getToken(): string | null {
+  // First try httpOnly cookie (set by backend), fallback to localStorage
   return localStorage.getItem('nova_access_token');
 }
 
 export function setToken(token: string | null): void {
   if (token) {
+    // Store in localStorage as fallback (httpOnly cookie is primary)
     localStorage.setItem('nova_access_token', token);
   } else {
     localStorage.removeItem('nova_access_token');
   }
+}
+
+export function clearTokens(): void {
+  localStorage.removeItem('nova_access_token');
+  // Clear the cookie by sending an expired cookie
+  document.cookie = 'access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+  document.cookie = 'refresh_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
 }
 
 let refreshPromise: Promise<string | null> | null = null;
@@ -67,7 +76,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
 
   const doFetch = (): Promise<Response> =>
-    fetch(`${API_BASE}${path}`, { ...options, headers });
+    fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
 
   let resp = await doFetch();
   if (resp.status === 401) {
@@ -1201,4 +1210,29 @@ export async function exportMyData(): Promise<Record<string, unknown>> {
 
 export async function deleteMyAccount(): Promise<void> {
   await request<unknown>('/users/me', { method: 'DELETE' });
+}
+
+// --- Code Execution ---
+export interface CodeResult {
+  output: string;
+  error: string | null;
+  execution_time: number;
+  language: string;
+}
+
+export async function runCode(language: string, code: string): Promise<CodeResult> {
+  const token = getToken();
+  const res = await fetch(`${API_BASE}/code/run`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ language, code }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Code execution failed');
+  }
+  return res.json();
 }

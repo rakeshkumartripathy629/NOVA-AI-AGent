@@ -320,12 +320,31 @@ async def login(
     )
     user = result.scalar_one_or_none()
     
+    # Check account lockout
+    lockout_key = f"lockout:{username}"
+    lockout_count = rate_limiter.increment(lockout_key, settings.LOCKOUT_DURATION_MINUTES * 60)
+    if lockout_count > settings.MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail=f"Account locked due to too many failed attempts. Try again in {settings.LOCKOUT_DURATION_MINUTES} minutes.",
+        )
+    
     if not user or not user.hashed_password or not verify_password(password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Login successful — clear lockout counter
+    try:
+        r = rate_limiter._get_redis()
+        if r:
+            r.delete(lockout_key)
+        else:
+            rate_limiter._requests.pop(lockout_key, None)
+    except Exception:
+        pass
     
     if not user.is_active or user.status != UserStatus.ACTIVE:
         raise HTTPException(
@@ -368,6 +387,15 @@ async def login(
         secure=settings.is_production,
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+    )
+    # Set access token as httpOnly cookie (defense-in-depth: XSS can't steal it)
+    response.set_cookie(
+        key="access_token",
+        value=token_pair.access_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     
     # Get organization if exists

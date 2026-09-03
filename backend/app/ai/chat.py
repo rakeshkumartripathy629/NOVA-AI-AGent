@@ -21,7 +21,7 @@ from app.models.message import Message, MessageRole
 
 logger = get_logger("ai.chat")
 
-MAX_HISTORY_MESSAGES = 40
+MAX_HISTORY_MESSAGES = 20
 
 
 async def _load_history(conversation_id: UUID, exclude_ids: List[UUID]) -> List[Dict[str, str]]:
@@ -95,10 +95,13 @@ async def stream_chat_response(
     provider_name: Optional[str] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Stream an AI chat response as a sequence of event dicts."""
+    import time as _perf
+    _t0 = _perf.monotonic()
     history = await _load_history(
         conversation.id,
         exclude_ids=[assistant_message_id],
     )
+    logger.info("[PERF] History load: %.2fs", _perf.monotonic() - _t0)
 
     agent = await _resolve_agent(agent_id)
     if agent:
@@ -110,59 +113,86 @@ async def stream_chat_response(
     # RAG context
     citations: List[Dict[str, Any]] = []
 
-    # Long-term memory context
-    memory_block = ""
-    if memory_enabled(user):
-        try:
-            from app.ai.memory import recall_context
-
-            memory_block = await recall_context(user.id, user_message_content)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Memory recall failed: %s", exc)
-
-    # Always start from a concrete system prompt, then layer memory on top so it
-    # reaches the provider even in the default flow (no custom system_prompt).
+    # Always start from a concrete system prompt.
     base_system_prompt = system_prompt or build_base_system_prompt(user, user_message_content)
+
+    # Run memory recall, RAG retrieval, and web search in parallel for speed
+    import asyncio
+    _t1 = _perf.monotonic()
+
+    # ── Graceful degradation with timeouts ──────────────────────────────
+    async def _do_memory():
+        # Skip memory for very short messages ("hi", "ok", "thanks") for speed
+        if len(user_message_content.strip()) < 5:
+            return ""
+        if memory_enabled(user):
+            try:
+                from app.ai.memory import recall_context
+                return await asyncio.wait_for(
+                    recall_context(user.id, user_message_content),
+                    timeout=3.0,
+                )
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                return ""
+        return ""
+
+    async def _do_rag():
+        if knowledge_base_ids:
+            try:
+                return await asyncio.wait_for(
+                    _retrieve_context(conversation.id, knowledge_base_ids, user_message_content),
+                    timeout=3.0,
+                )
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                return []
+        return []
+
+    async def _do_web():
+        if use_web_search:
+            try:
+                from app.ai.websearch import web_search_augment
+                return await asyncio.wait_for(
+                    web_search_augment(user_message_content),
+                    timeout=5.0,
+                )
+            except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+                pass
+        return "", []
+
+    memory_block, retrieved, (search_context, search_citations) = await asyncio.gather(
+        _do_memory(), _do_rag(), _do_web()
+    )
+    logger.info("[PERF] Memory+RAG+Web gather: %.2fs", _perf.monotonic() - _t1)
+
     if memory_block:
         base_system_prompt = f"{base_system_prompt}\n\n{memory_block}"
     system_prompt = base_system_prompt
-    if knowledge_base_ids:
-        retrieved = await _retrieve_context(conversation.id, knowledge_base_ids, user_message_content)
-        if retrieved:
-            context_block = "\n\n".join(
-                f"[{i + 1}] {r['content']}" for i, r in enumerate(retrieved)
-            )
-            system_prompt = (
-                f"{base_system_prompt}\n\n"
-                f"Answer the user's question using the retrieved context below. "
-                f"If the context does not contain the answer, use live web search results if available. "
-                f"Keep the answer short and relevant. Cite sources as [n].\n\n"
-                f"Context:\n{context_block}"
-            )
-            citations = [
-                {
-                    "index": i + 1,
-                    "content": r["content"][:300],
-                    "document_id": str(r.get("document_id", "")),
-                    "title": r.get("title", ""),
-                    "score": r.get("score", 0.0),
-                }
-                for i, r in enumerate(retrieved)
-            ]
-        else:
-            system_prompt = base_system_prompt
 
-    # Web search augmentation
-    if use_web_search:
-        try:
-            from app.ai.websearch import web_search_augment
+    if retrieved:
+        context_block = "\n\n".join(
+            f"[{i + 1}] {r['content']}" for i, r in enumerate(retrieved)
+        )
+        system_prompt = (
+            f"{base_system_prompt}\n\n"
+            f"Answer the user's question using the retrieved context below. "
+            f"If the context does not contain the answer, use live web search results if available. "
+            f"Keep the answer short and relevant. Cite sources as [n].\n\n"
+            f"Context:\n{context_block}"
+        )
+        citations = [
+            {
+                "index": i + 1,
+                "content": r["content"][:300],
+                "document_id": str(r.get("document_id", "")),
+                "title": r.get("title", ""),
+                "score": r.get("score", 0.0),
+            }
+            for i, r in enumerate(retrieved)
+        ]
 
-            search_context, search_citations = await web_search_augment(user_message_content)
-            if search_context:
-                system_prompt = f"{system_prompt or base_system_prompt}\n\nLive web search results:\n{search_context}"
-                citations.extend(search_citations)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Web search failed: %s", exc)
+    if search_context:
+        system_prompt = f"{system_prompt}\n\nLive web search results:\n{search_context}"
+        citations.extend(search_citations)
 
     if citations:
         yield {"type": "citations", "citations": citations}
@@ -171,27 +201,41 @@ async def stream_chat_response(
         {"role": "user", "content": user_message_content}
     ]
 
-    provider = get_provider(provider_name) if provider_name else default_provider()
+    from app.ai.providers import is_provider_healthy
 
-    # MCP tools integration
+    logger.info("[PERF] Total prep before stream: %.2fs", _perf.monotonic() - _t0)
+    primary_provider = get_provider(provider_name) if provider_name else default_provider()
+    # Skip primary if it's in cooldown — try next available instantly
+    if not is_provider_healthy(primary_provider.name):
+        from app.core.config import settings as _s
+        for name in ("groq", "cerebras", "gemini"):
+            key = f"{name.upper()}_API_KEY"
+            if getattr(_s, key, None) and is_provider_healthy(name):
+                primary_provider = get_provider(name)
+                break
+
+    # Build fallback list: skip unhealthy providers instantly (no timeout wait)
+    def _fallback_providers():
+        from app.core.config import settings as _s
+        fallbacks = []
+        for name in ("groq", "gemini", "cerebras"):
+            if name == primary_provider.name:
+                continue
+            key = f"{name.upper()}_API_KEY"
+            if getattr(_s, key, None) and is_provider_healthy(name):
+                fallbacks.append(get_provider(name))
+        return fallbacks
+
+    # MCP tools integration (skipped for speed — re-enable when MCP server is running)
     mcp_tools = []
-    if settings.MCP_ENABLED:
-        try:
-            from app.ai.mcp_client import get_mcp_tools, execute_mcp_tool_calls
-            mcp_tools = await get_mcp_tools()
-            if mcp_tools:
-                from app.ai.mcp_client import mcp_tools_to_openai_functions
-                mcp_functions = mcp_tools_to_openai_functions(mcp_tools)
-                if tools is None:
-                    tools = []
-                tools = tools + mcp_functions
-        except Exception as exc:
-            logger.warning("MCP tools fetch failed: %s", exc)
 
-    try:
+    async def _stream_from(provider, retry_num=0, use_default_model=False):
+        """Stream from a provider with error handling."""
+        # For fallback providers, use their default model (don't pass wrong model name)
+        stream_model = None if use_default_model else model
         async for event in provider.stream(
             messages=messages,
-            model=model,
+            model=stream_model,
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
@@ -205,20 +249,37 @@ async def stream_chat_response(
                             messages.append({"role": "assistant", "content": None, "tool_calls": [event]})
                             messages.append({"role": "tool", "content": tr["content"]})
                         async for retry_event in provider.stream(
-                            messages=messages,
-                            model=model,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            tools=tools,
-                            system_prompt=system_prompt,
+                            messages=messages, model=stream_model, temperature=temperature,
+                            max_tokens=max_tokens, tools=tools, system_prompt=system_prompt,
                         ):
                             yield retry_event
                         return
                     except Exception as exc:
                         logger.warning("MCP tool execution failed: %s", exc)
             yield event
+
+    try:
+        async for event in _stream_from(primary_provider):
+            yield event
     except ProviderError as exc:
-        yield {"type": "error", "message": str(exc)}
+        logger.warning("Primary provider (%s) failed: %s", primary_provider.name, exc)
+        # Auto-fallback to next available provider
+        for fallback in _fallback_providers():
+            try:
+                logger.info("Falling back to provider: %s", fallback.name)
+                # Silent fallback — don't show switching message to user
+                # Use fallback provider's own default model
+                async for event in _stream_from(fallback, use_default_model=True):
+                    yield event
+                return
+            except ProviderError as fb_exc:
+                logger.warning("Fallback provider (%s) also failed: %s", fallback.name, fb_exc)
+                continue
+            except Exception as fb_exc:
+                logger.warning("Fallback provider (%s) error: %s", fallback.name, fb_exc)
+                continue
+        # All providers failed
+        yield {"type": "error", "message": f"All providers failed. Last error: {exc}"}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Provider stream error")
         yield {"type": "error", "message": str(exc)}

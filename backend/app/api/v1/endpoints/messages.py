@@ -327,12 +327,28 @@ async def stream_message(
     db: AsyncSession = Depends(get_db),
 ):
     """Generate and stream an AI response for a conversation (SSE)."""
-    await _check_membership(db, conversation_id, current_user.id)
-
-    conversation_result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
+    # Combined membership + conversation check in one query for speed
+    conversation_result = await db.execute(
+        select(Conversation)
+        .join(ConversationMember, ConversationMember.conversation_id == Conversation.id)
+        .where(
+            Conversation.id == conversation_id,
+            ConversationMember.user_id == current_user.id,
+        )
+    )
     conversation = conversation_result.scalar_one_or_none()
     if not conversation:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found or not a member")
+
+    # AI rate limiting per user (in-memory, no DB)
+    from app.core.config import settings as _s
+    from app.core.security import rate_limiter as _rl
+    chat_key = f"chat:{current_user.id}"
+    if not _rl.is_allowed(chat_key, _s.RATE_LIMIT_CHAT_REQUESTS, _s.RATE_LIMIT_CHAT_WINDOW):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"AI rate limit exceeded. Max {_s.RATE_LIMIT_CHAT_REQUESTS} requests per minute.",
+        )
 
     user_message = None
     if request.user_message_id:
@@ -377,12 +393,10 @@ async def stream_message(
         model=request.model or conversation.model,
     )
     db.add(assistant_message)
-    await db.flush()
-    await db.commit()
-
     conversation.last_message_at = datetime.utcnow()
     if not request.user_message_id:
         conversation.message_count += 1
+    await db.flush()
     await db.commit()
 
     from app.ai.chat import stream_chat_response

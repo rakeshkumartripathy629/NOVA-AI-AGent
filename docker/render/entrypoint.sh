@@ -16,6 +16,9 @@ rm -f /etc/nginx/sites-enabled/default
 echo "[entrypoint] Rendering nginx config with PORT=$PORT"
 envsubst '${PORT}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 
+echo "[entrypoint] Running database migrations..."
+alembic upgrade head 2>&1 || echo "[entrypoint] WARNING: alembic migration failed (tables may already exist)"
+
 echo "[entrypoint] Starting backend (uvicorn) on 127.0.0.1:8000"
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level info &
 UVICORN_PID=$!

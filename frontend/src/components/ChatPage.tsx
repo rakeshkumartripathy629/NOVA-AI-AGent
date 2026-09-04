@@ -11,6 +11,7 @@ import ProjectsModal from "./ProjectsModal";
 import SettingsModal from "./SettingsModal";
 import AdminPanel from "./AdminPanel";
 import Markdown from "../lib/Markdown";
+import ImageMessage from "./ImageMessage";
 import { PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, modelName } from "../lib/models";
 import {
   BellIcon,
@@ -40,6 +41,67 @@ interface ChatMessage {
     mime_type?: string;
     status?: string;
   };
+}
+
+// Detect image URLs in text and render them directly
+const IMAGE_URL_REGEX = /\!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+const BARE_POLLINATIONS_REGEX = /(https?:\/\/image\.pollinations\.ai\/prompt\/[^\s<>"\)]+)/g;
+
+function MessageContent({ content }: { content: string }) {
+  if (!content) return null;
+
+  // Check if content is ONLY an image (no other text)
+  const trimmed = content.trim();
+  const imageMatch = trimmed.match(/^\!\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
+  if (imageMatch) {
+    return <ImageMessage url={imageMatch[2]} alt={imageMatch[1]} />;
+  }
+
+  // Check for bare pollinations URL
+  const bareMatch = trimmed.match(/^(https?:\/\/image\.pollinations\.ai\/prompt\/[^\s<>"\)]+)$/);
+  if (bareMatch) {
+    return <ImageMessage url={bareMatch[1]} />;
+  }
+
+  // Mixed content: split by image markers
+  const parts: React.ReactNode[] = [];
+  let remaining = content;
+  let key = 0;
+
+  // First try markdown images ![alt](url)
+  let match;
+  IMAGE_URL_REGEX.lastIndex = 0;
+  while ((match = IMAGE_URL_REGEX.exec(content)) !== null) {
+    const before = content.slice(remaining.indexOf(match[0]) > 0 ? 0 : remaining.length, match.index);
+    if (before.trim()) {
+      parts.push(<Markdown key={key++} text={before} />);
+    }
+    parts.push(<ImageMessage key={key++} url={match[2]} alt={match[1]} />);
+    remaining = content.slice(match.index + match[0].length);
+  }
+
+  if (parts.length === 0) {
+    // No images found — check for bare pollinations URLs
+    BARE_POLLINATIONS_REGEX.lastIndex = 0;
+    const bareMatch2 = BARE_POLLINATIONS_REGEX.exec(content);
+    if (bareMatch2) {
+      const before = content.slice(0, bareMatch2.index);
+      const after = content.slice(bareMatch2.index + bareMatch2[0].length);
+      if (before.trim()) parts.push(<Markdown key={key++} text={before} />);
+      parts.push(<ImageMessage key={key++} url={bareMatch2[1]} />);
+      if (after.trim()) parts.push(<Markdown key={key++} text={after} />);
+    }
+  }
+
+  if (parts.length === 0) {
+    return <Markdown text={content} />;
+  }
+
+  if (remaining.trim()) {
+    parts.push(<Markdown key={key++} text={remaining} />);
+  }
+
+  return <>{parts}</>;
 }
 
 const STARTER_PROMPTS = [
@@ -1057,7 +1119,7 @@ export default function ChatPage() {
                   ) : (
                     <div className="message-content">
                       {m.role === "assistant" ? (
-                        <Markdown text={m.content} />
+                        <MessageContent content={m.content} />
                       ) : (
                         m.content
                       )}

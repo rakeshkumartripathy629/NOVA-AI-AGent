@@ -27,6 +27,8 @@ from app.api.v1.endpoints import (
     admin,
     memories,
     code_execution,
+    image_gen,
+    personas,
 )
 
 api_router = APIRouter()
@@ -100,3 +102,9 @@ api_router.include_router(memories.router, prefix="/memory", tags=["Memory"])
 api_router.include_router(memories.router, prefix="/memories", tags=["Memory"])
 # Code Execution
 api_router.include_router(code_execution.router, prefix="/code", tags=["Code Execution"])
+
+# Image Generation
+api_router.include_router(image_gen.router, prefix="/image", tags=["Image Generation"])
+
+# Personas
+api_router.include_router(personas.router, prefix="/personas", tags=["Personas"])

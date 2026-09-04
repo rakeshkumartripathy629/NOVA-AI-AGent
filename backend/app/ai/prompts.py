@@ -10,14 +10,25 @@ if TYPE_CHECKING:
     from app.models.memory import MemoryItem
 
 
-def build_base_system_prompt(user, user_message: str = "") -> str:
-    """Build the base system prompt personalized for the user."""
+def build_base_system_prompt(user, user_message: str = "", persona=None) -> str:
+    """Build the base system prompt personalized for the user.
+    
+    If a persona is provided, use its system_prompt as the base personality.
+    Otherwise, use the default Nova personality.
+    """
     name = getattr(user, "username", None) or str(
         getattr(user, "email", "user") or "user"
     ).split("@")[0]
     today = date.today().isoformat()
+    
+    # Use persona's system prompt if provided, otherwise default Nova
+    if persona and hasattr(persona, 'system_prompt') and persona.system_prompt:
+        personality = persona.system_prompt
+    else:
+        personality = "You are Nova, a personal AI assistant."
+    
     return (
-        "You are Nova, a personal AI assistant.\n"
+        f"{personality}\n"
         f"You are helping a user named {name or 'the user'}. Today is {today}.\n\n"
         "## General Rules\n"
         "- Be concise: answer exactly what the user asked in short, clear sentences. "
@@ -26,6 +37,12 @@ def build_base_system_prompt(user, user_message: str = "") -> str:
         "- Keep answers under ~100 words unless the user explicitly asks for detail.\n"
         "- Use the 'Remembered context' below when relevant, but never mention it.\n"
         "- Never contradict a remembered fact unless the user corrects it.\n\n"
+        "## Image Generation\n"
+        "When the user asks you to generate, create, or draw an image, respond with a "
+        "JSON block like this:\n"
+        '```json\n{"action": "generate_image", "prompt": "detailed description here"}\n```\n\n'
+        "The system will automatically generate the image. Do NOT describe the image "
+        "in text — just provide the JSON action.\n\n"
         "## Project Building Mode (CRITICAL - ALWAYS FOLLOW)\n"
         "When the user asks you to create, build, generate, or write ANY project, "
         "CRUD app, website, API, code, script, or any code-based work, you MUST "

@@ -69,6 +69,7 @@ from app.models.usage import UsageAggregate, UsageRecord, UsageType
 from app.models.plugin import Plugin, PluginCategory, PluginInstallation, PluginStatus
 from app.models.memory import MemoryCategory, MemoryItem
 from app.models.conversation_summary import ConversationSummary
+from app.models.persona import Persona
 
 __all__ = [
     "Base",
@@ -151,4 +152,5 @@ __all__ = [
     "MemoryCategory",
     "MemoryItem",
     "ConversationSummary",
+    "Persona",
 ]

@@ -277,6 +277,7 @@ async def seed_prompts(db: AsyncSession, owner: User, org: Organization) -> None
 async def seed_all() -> None:
     """Run all seed routines inside a single session."""
     from app.db.session import get_session_factory
+    from app.db.seed_personas import seed_personas
 
     factory = get_session_factory()
     async with factory() as db:
@@ -287,6 +288,7 @@ async def seed_all() -> None:
             await db.flush()
             await seed_free_subscription(db, org)
             await seed_prompts(db, superuser, org)
+            await seed_personas(db)
             await db.commit()
             logger.info("Database seed complete")
         except Exception:

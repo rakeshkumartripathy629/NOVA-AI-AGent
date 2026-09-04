@@ -1236,3 +1236,83 @@ export async function runCode(language: string, code: string): Promise<CodeResul
   }
   return res.json();
 }
+
+// ---- Image Generation ----
+
+export interface ImageGenResult {
+  url: string;
+  prompt: string;
+  width: number;
+  height: number;
+  model: string;
+  seed: number;
+  generation_time_ms: number;
+}
+
+export async function generateImage(
+  prompt: string,
+  options?: { width?: number; height?: number; model?: string },
+): Promise<ImageGenResult> {
+  return request<ImageGenResult>('/image/generate', {
+    method: 'POST',
+    body: JSON.stringify({
+      prompt,
+      width: options?.width ?? 1024,
+      height: options?.height ?? 1024,
+      model: options?.model ?? 'flux',
+    }),
+  });
+}
+
+// ---- Personas ----
+
+export interface Persona {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  avatar_emoji: string;
+  system_prompt: string;
+  category: string;
+  is_builtin: boolean;
+  is_active: boolean;
+  temperature?: number | null;
+  max_tokens?: number | null;
+}
+
+export async function listPersonas(category?: string): Promise<Persona[]> {
+  const qs = category ? `?category=${encodeURIComponent(category)}` : '';
+  return request<Persona[]>(`/personas${qs}`);
+}
+
+export async function getPersona(idOrSlug: string): Promise<Persona> {
+  return request<Persona>(`/personas/${idOrSlug}`);
+}
+
+export async function createPersona(data: {
+  name: string;
+  description?: string;
+  avatar_emoji?: string;
+  system_prompt: string;
+  category?: string;
+  temperature?: number;
+}): Promise<Persona> {
+  return request<Persona>('/personas', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updatePersona(
+  id: string,
+  data: Partial<{ name: string; description: string; avatar_emoji: string; system_prompt: string; category: string }>,
+): Promise<Persona> {
+  return request<Persona>(`/personas/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePersona(id: string): Promise<void> {
+  await request<unknown>(`/personas/${id}`, { method: 'DELETE' });
+}

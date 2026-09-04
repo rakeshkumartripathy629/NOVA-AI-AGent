@@ -23,6 +23,10 @@ from app.api.v1.endpoints import (
     voice,
     vision,
     admin,
+    memories,
+    code_execution,
+    image_gen,
+    personas,
 )
 
 __all__ = [
@@ -47,4 +51,8 @@ __all__ = [
     "voice",
     "vision",
     "admin",
+    "memories",
+    "code_execution",
+    "image_gen",
+    "personas",
 ]

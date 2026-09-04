@@ -462,7 +462,7 @@ async def stream_message(
             if image_action:
                 import logging
                 logging.getLogger(__name__).info("Image generation requested: %s", image_action.get("prompt", "")[:100])
-                yield f"data: {json.dumps({'type': 'content', 'content': '\n🎨 Generating image...'})}\n\n"
+                yield f"data: {json.dumps({'type': 'content', 'content': '🎨 '})}\n\n"
                 try:
                     from app.ai.image_gen import generate_image_url
                     image_url = await generate_image_url(
@@ -470,10 +470,8 @@ async def stream_message(
                         width=image_action.get("width", 1024),
                         height=image_action.get("height", 1024),
                     )
-                    # Build clean response: short text + inline image
-                    prompt_short = image_action["prompt"][:120]
-                    image_md = f"\n\n{prompt_short}\n\n![{prompt_short}]({image_url})\n"
-                    # Replace accumulated content completely — remove AI JSON junk
+                    # Only image — no link, no extra text
+                    image_md = f"![]({image_url})"
                     accumulated.clear()
                     accumulated.append(image_md)
                     yield f"data: {json.dumps({'type': 'content', 'content': image_md})}\n\n"

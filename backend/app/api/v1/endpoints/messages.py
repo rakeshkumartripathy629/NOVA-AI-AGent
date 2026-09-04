@@ -29,13 +29,16 @@ router = APIRouter()
 def _extract_image_action(text: str) -> dict | None:
     """Extract image generation action from AI response.
     
-    Detects multiple patterns:
+    Detects ANY format the AI might return:
     1. JSON with action: generate_image
     2. Markdown image ![alt](pollinations_url)
-    3. Link [text](pollinations_url)
+    3. Link [text](pollinations_url)  
     4. Bare pollinations URL
+    5. URL in parentheses (url)
+    6. ANY text containing pollinations URL
     """
     import re
+    from urllib.parse import unquote
     
     # Pattern 1: JSON action block
     json_patterns = [
@@ -52,24 +55,12 @@ def _extract_image_action(text: str) -> dict | None:
             except json.JSONDecodeError:
                 pass
     
-    # Pattern 2: Markdown image ![alt](pollinations_url)
-    img_match = re.search(r'!\[([^\]]*)\]\((https?://image\.pollinations\.ai/[^)]+)\)', text)
-    if img_match:
-        prompt = _extract_prompt_from_url(img_match.group(2))
-        if prompt:
-            return {"action": "generate_image", "prompt": prompt}
-    
-    # Pattern 3: Link [text](pollinations_url) — AI returned link instead of image
-    link_match = re.search(r'\[([^\]]*)\]\((https?://image\.pollinations\.ai/[^)]+)\)', text)
-    if link_match:
-        prompt = _extract_prompt_from_url(link_match.group(2))
-        if prompt:
-            return {"action": "generate_image", "prompt": prompt}
-    
-    # Pattern 4: Bare pollinations URL in text
-    bare_match = re.search(r'(https?://image\.pollinations\.ai/prompt/[^\s<>"]+)', text)
-    if bare_match:
-        prompt = _extract_prompt_from_url(bare_match.group(1))
+    # Pattern 2-6: Find ANY pollinations URL anywhere in text
+    # This catches all formats: ![alt](url), [text](url), bare URL, (url), etc.
+    url_match = re.search(r'(https?://image\.pollinations\.ai/prompt/[^\s<>"\)\]]+)', text)
+    if url_match:
+        raw_url = url_match.group(1).rstrip('.,;:!?)')
+        prompt = _extract_prompt_from_url(raw_url)
         if prompt:
             return {"action": "generate_image", "prompt": prompt}
     
@@ -89,20 +80,22 @@ def _extract_prompt_from_url(url: str) -> str | None:
 
 
 def _clean_image_json(text: str) -> str:
-    """Remove image generation artifacts from text."""
+    """Remove ALL image generation artifacts from text."""
     import re
     # Remove JSON blocks
     text = re.sub(r'```json\s*\{[^`]*?\"action\"\s*:\s*\"generate_image\"[^`]*?\}\s*```', '', text, flags=re.DOTALL)
     text = re.sub(r'\{\s*\"action\"\s*:\s*\"generate_image\"[^}]*\}', '', text)
-    # Remove markdown images
+    # Remove markdown images ![alt](pollinations_url)
     text = re.sub(r'!\[[^\]]*\]\(https?://image\.pollinations\.ai/[^)]+\)', '', text)
-    # Remove links to pollinations
+    # Remove links to pollinations [text](url)
     text = re.sub(r'\[[^\]]*\]\(https?://image\.pollinations\.ai/[^)]+\)', '', text)
     # Remove bare pollinations URLs
-    text = re.sub(r'https?://image\.pollinations\.ai/prompt/[^\s<>"]+', '', text)
-    # Remove "Generated Image" text
-    text = re.sub(r'\n*Generated Image\n*', '', text)
-    text = re.sub(r'\n*\[View full image\]\([^)]+\)\n*', '', text)
+    text = re.sub(r'https?://image\.pollinations\.ai/prompt/[^\s<>"\)\]]+', '', text)
+    # Remove "Generated Image" and "View full image" text
+    text = re.sub(r'\n*Generated [Ii]mage\n*', '', text)
+    text = re.sub(r'\n*\[View full image\]\([^)]*\)\n*', '', text)
+    # Clean up extra newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 
@@ -533,14 +526,15 @@ async def stream_message(
                         width=image_action.get("width", 1024),
                         height=image_action.get("height", 1024),
                     )
-                    image_md = f"![]({image_url})"
+                    # Send as image event — frontend renders <img> directly
+                    yield f"data: {json.dumps({'type': 'image', 'url': image_url, 'prompt': image_action['prompt'][:120]})}\n\n"
+                    # Also set accumulated for DB save
                     accumulated.clear()
-                    accumulated.append(image_md)
-                    yield f"data: {json.dumps({'type': 'content', 'content': image_md})}\n\n"
+                    accumulated.append(f"![{image_action['prompt'][:80]}]({image_url})")
                 except Exception as img_exc:  # noqa: BLE001
                     import logging
                     logging.getLogger(__name__).warning("Image generation failed: %s", img_exc)
-                    yield f"data: {json.dumps({'type': 'content', 'content': f'\n⚠️ Image generation failed: {str(img_exc)}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'content', 'content': f'⚠️ Image generation failed: {str(img_exc)}'})}\n\n"
             else:
                 # NORMAL: stream all buffered events to user
                 for evt in buffered_events:

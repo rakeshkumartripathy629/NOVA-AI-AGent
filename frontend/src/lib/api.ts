@@ -1077,6 +1077,7 @@ export interface MessageListResponse {
 export type ChatEvent =
   | { type: 'content'; content: string }
   | { type: 'citations'; citations: unknown[] }
+  | { type: 'image'; url: string; prompt: string }
   | { type: 'done'; message_id: string }
   | { type: 'error'; message: string };
 

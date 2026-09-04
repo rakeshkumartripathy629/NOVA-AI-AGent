@@ -362,6 +362,23 @@ export default function ChatPage() {
               }
               return next;
             });
+          } else if (event.type === "image") {
+            // Direct image event — render <img> tag
+            const imgUrl = (event as { url?: string }).url ?? '';
+            const imgPrompt = (event as { prompt?: string }).prompt ?? '';
+            if (imgUrl) {
+              setMessages((prev) => {
+                const next = [...prev];
+                const last = next[next.length - 1];
+                if (last && last.streaming) {
+                  next[next.length - 1] = {
+                    ...last,
+                    content: `![${imgPrompt}](${imgUrl})`,
+                  };
+                }
+                return next;
+              });
+            }
           } else if (event.type === "error") {
             setMessages((prev) => {
               const next = [...prev];

@@ -481,6 +481,7 @@ async def stream_message(
             # Buffer events — don't stream raw AI text yet (may contain image JSON)
             buffered_events = []
             is_image_action = False
+            image_check_text = ""
 
             async for event in stream_chat_response(
                 conversation=conversation,
@@ -500,25 +501,29 @@ async def stream_message(
             ):
                 if event.get("type") == "content":
                     accumulated.append(event.get("content", ""))
+                    image_check_text += event.get("content", "")
                 if event.get("type") == "citations":
                     citations = event.get("citations", [])
-                buffered_events.append(event)
 
-                # Check for image action mid-stream (once we have enough text)
-                if not is_image_action and len(accumulated) > 2:
-                    full_check = "".join(accumulated)
-                    if _extract_image_action(full_check):
+                # Quick image detection (check every 50 chars)
+                if not is_image_action and len(image_check_text) > 50:
+                    if _extract_image_action(image_check_text):
                         is_image_action = True
+                    else:
+                        image_check_text = image_check_text[-100:]  # keep tail
 
-            # Now decide: image or normal text?
+                # STREAM directly — no buffering for speed!
+                if not is_image_action:
+                    yield f"data: {json.dumps(event)}\n\n"
+
+            # After streaming: check if it was an image action
             full_text = "".join(accumulated)
             image_action = _extract_image_action(full_text)
 
             if image_action:
-                # IMAGE: don't show AI text, generate and show image only
+                # IMAGE: replace text with generated image
                 import logging
-                logging.getLogger(__name__).info("Image generation: %s", image_action.get("prompt", "")[:100])
-                yield f"data: {json.dumps({'type': 'content', 'content': '🎨 Generating image...'})}\n\n"
+                logging.getLogger(__name__).info("Image gen: %s", image_action.get("prompt", "")[:80])
                 try:
                     from app.ai.image_gen import generate_image_url
                     image_url = await generate_image_url(
@@ -526,19 +531,12 @@ async def stream_message(
                         width=image_action.get("width", 1024),
                         height=image_action.get("height", 1024),
                     )
-                    # Send as image event — frontend renders <img> directly
                     yield f"data: {json.dumps({'type': 'image', 'url': image_url, 'prompt': image_action['prompt'][:120]})}\n\n"
-                    # Also set accumulated for DB save
                     accumulated.clear()
                     accumulated.append(f"![{image_action['prompt'][:80]}]({image_url})")
                 except Exception as img_exc:  # noqa: BLE001
                     import logging
-                    logging.getLogger(__name__).warning("Image generation failed: %s", img_exc)
-                    yield f"data: {json.dumps({'type': 'content', 'content': f'⚠️ Image generation failed: {str(img_exc)}'})}\n\n"
-            else:
-                # NORMAL: stream all buffered events to user
-                for evt in buffered_events:
-                    yield f"data: {json.dumps(evt)}\n\n"
+                    logging.getLogger(__name__).warning("Image gen failed: %s", img_exc)
 
         except Exception as exc:  # noqa: BLE001
             import logging

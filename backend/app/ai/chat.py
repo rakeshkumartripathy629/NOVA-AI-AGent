@@ -21,7 +21,7 @@ from app.models.message import Message, MessageRole
 
 logger = get_logger("ai.chat")
 
-MAX_HISTORY_MESSAGES = 20
+MAX_HISTORY_MESSAGES = 10
 
 
 async def _load_history(conversation_id: UUID, exclude_ids: List[UUID]) -> List[Dict[str, str]]:
@@ -122,15 +122,15 @@ async def stream_chat_response(
 
     # ── Graceful degradation with timeouts ──────────────────────────────
     async def _do_memory():
-        # Skip memory for very short messages ("hi", "ok", "thanks") for speed
-        if len(user_message_content.strip()) < 5:
+        # Skip memory for short messages for speed
+        if len(user_message_content.strip()) < 10:
             return ""
         if memory_enabled(user):
             try:
                 from app.ai.memory import recall_context
                 return await asyncio.wait_for(
                     recall_context(user.id, user_message_content),
-                    timeout=3.0,
+                    timeout=1.0,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 return ""
@@ -141,7 +141,7 @@ async def stream_chat_response(
             try:
                 return await asyncio.wait_for(
                     _retrieve_context(conversation.id, knowledge_base_ids, user_message_content),
-                    timeout=3.0,
+                    timeout=1.0,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 return []
@@ -153,7 +153,7 @@ async def stream_chat_response(
                 from app.ai.websearch import web_search_augment
                 return await asyncio.wait_for(
                     web_search_augment(user_message_content),
-                    timeout=5.0,
+                    timeout=2.0,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 pass

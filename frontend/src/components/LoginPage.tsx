@@ -100,7 +100,9 @@ export default function LoginPage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="auth-logo">N</div>
+          <div className="auth-logo">
+            <img src="/nova-logo.png" alt="Nova AI Logo" />
+          </div>
           <h1>Nova AI</h1>
           <p>Conversational intelligence platform</p>
         </div>

@@ -21,6 +21,32 @@
   padding: 12px 12px 8px;
 }
 
+.chatgpt-brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chatgpt-brand-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  animation: logoRotate 4s linear infinite;
+  flex-shrink: 0;
+}
+
+.chatgpt-brand-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 50%;
+}
+
+@keyframes logoRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
 .chatgpt-brand {
   font-size: 16px;
   font-weight: 600;
@@ -422,8 +448,17 @@
 }
 
 .chatgpt-msg.assistant .chatgpt-msg-avatar {
-  background: linear-gradient(135deg, #10a37f, #1a7f5a);
-  color: white;
+  background: linear-gradient(135deg, #6c7cff, #9a6cff);
+  overflow: hidden;
+  padding: 0;
+}
+
+.chatgpt-msg.assistant .chatgpt-msg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  animation: logoRotate 6s linear infinite;
 }
 
 .chatgpt-msg.user .chatgpt-msg-avatar {

@@ -60,7 +60,11 @@ export default function SharePage({ token }: SharePageProps) {
                   className={`message-row ${m.role}`}
                 >
                   <div className="message-avatar">
-                    {m.role === 'user' ? 'You' : 'AI'}
+                    {m.role === 'user' ? (
+                      'You'
+                    ) : (
+                      <img src="/nova-logo.png" alt="Nova" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    )}
                   </div>
                   <div className="message-main">
                     <div className="message-bubble">

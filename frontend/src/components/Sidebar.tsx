@@ -172,7 +172,12 @@ export default function Sidebar({
       {/* Header */}
       <div className="chatgpt-sidebar-header">
         {!collapsed && (
-          <span className="chatgpt-brand">Nova AI</span>
+          <div className="chatgpt-brand-wrap">
+            <div className="chatgpt-brand-logo">
+              <img src="/nova-logo.png" alt="Nova" />
+            </div>
+            <span className="chatgpt-brand">Nova AI</span>
+          </div>
         )}
         <button
           className="chatgpt-sidebar-toggle"

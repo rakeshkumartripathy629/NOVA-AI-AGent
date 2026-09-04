@@ -27,14 +27,22 @@ router = APIRouter()
 
 
 def _extract_image_action(text: str) -> dict | None:
-    """Extract image generation action from AI response."""
+    """Extract image generation action from AI response.
+    
+    Detects multiple patterns:
+    1. JSON with action: generate_image
+    2. Markdown image ![alt](pollinations_url)
+    3. Link [text](pollinations_url)
+    4. Bare pollinations URL
+    """
     import re
-    # Look for JSON with action: generate_image
-    patterns = [
+    
+    # Pattern 1: JSON action block
+    json_patterns = [
         r'```json\s*(\{[^`]*?\"action\"\s*:\s*\"generate_image\"[^`]*?\})\s*```',
         r'(\{\s*\"action\"\s*:\s*\"generate_image\"[^}]*\})',
     ]
-    for pattern in patterns:
+    for pattern in json_patterns:
         match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
         if match:
             try:
@@ -43,15 +51,58 @@ def _extract_image_action(text: str) -> dict | None:
                     return data
             except json.JSONDecodeError:
                 pass
+    
+    # Pattern 2: Markdown image ![alt](pollinations_url)
+    img_match = re.search(r'!\[([^\]]*)\]\((https?://image\.pollinations\.ai/[^)]+)\)', text)
+    if img_match:
+        prompt = _extract_prompt_from_url(img_match.group(2))
+        if prompt:
+            return {"action": "generate_image", "prompt": prompt}
+    
+    # Pattern 3: Link [text](pollinations_url) — AI returned link instead of image
+    link_match = re.search(r'\[([^\]]*)\]\((https?://image\.pollinations\.ai/[^)]+)\)', text)
+    if link_match:
+        prompt = _extract_prompt_from_url(link_match.group(2))
+        if prompt:
+            return {"action": "generate_image", "prompt": prompt}
+    
+    # Pattern 4: Bare pollinations URL in text
+    bare_match = re.search(r'(https?://image\.pollinations\.ai/prompt/[^\s<>"]+)', text)
+    if bare_match:
+        prompt = _extract_prompt_from_url(bare_match.group(1))
+        if prompt:
+            return {"action": "generate_image", "prompt": prompt}
+    
+    return None
+
+
+def _extract_prompt_from_url(url: str) -> str | None:
+    """Extract prompt from a Pollinations.ai URL."""
+    import re
+    from urllib.parse import unquote
+    match = re.search(r'/prompt/([^?&]+)', url)
+    if match:
+        prompt = unquote(match.group(1)).replace('+', ' ').strip()
+        if len(prompt) > 5:
+            return prompt
     return None
 
 
 def _clean_image_json(text: str) -> str:
-    """Remove image generation JSON from text."""
+    """Remove image generation artifacts from text."""
     import re
-    # Remove the JSON block from the response
+    # Remove JSON blocks
     text = re.sub(r'```json\s*\{[^`]*?\"action\"\s*:\s*\"generate_image\"[^`]*?\}\s*```', '', text, flags=re.DOTALL)
     text = re.sub(r'\{\s*\"action\"\s*:\s*\"generate_image\"[^}]*\}', '', text)
+    # Remove markdown images
+    text = re.sub(r'!\[[^\]]*\]\(https?://image\.pollinations\.ai/[^)]+\)', '', text)
+    # Remove links to pollinations
+    text = re.sub(r'\[[^\]]*\]\(https?://image\.pollinations\.ai/[^)]+\)', '', text)
+    # Remove bare pollinations URLs
+    text = re.sub(r'https?://image\.pollinations\.ai/prompt/[^\s<>"]+', '', text)
+    # Remove "Generated Image" text
+    text = re.sub(r'\n*Generated Image\n*', '', text)
+    text = re.sub(r'\n*\[View full image\]\([^)]+\)\n*', '', text)
     return text.strip()
 
 

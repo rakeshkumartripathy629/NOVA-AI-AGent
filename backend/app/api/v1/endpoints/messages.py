@@ -462,7 +462,7 @@ async def stream_message(
             if image_action:
                 import logging
                 logging.getLogger(__name__).info("Image generation requested: %s", image_action.get("prompt", "")[:100])
-                yield f"data: {json.dumps({'type': 'content', 'content': '\n\n🎨 Generating image...\n'})}\n\n"
+                yield f"data: {json.dumps({'type': 'content', 'content': '\n🎨 Generating image...'})}\n\n"
                 try:
                     from app.ai.image_gen import generate_image_url
                     image_url = await generate_image_url(
@@ -470,11 +470,12 @@ async def stream_message(
                         width=image_action.get("width", 1024),
                         height=image_action.get("height", 1024),
                     )
-                    # Replace accumulated content with clean response + image
-                    image_md = f"\n\n![Generated Image]({image_url})\n\n[View full image]({image_url})\n"
-                    clean_text = _clean_image_json(full_text)
+                    # Build clean response: short text + inline image
+                    prompt_short = image_action["prompt"][:120]
+                    image_md = f"\n\n{prompt_short}\n\n![{prompt_short}]({image_url})\n"
+                    # Replace accumulated content completely — remove AI JSON junk
                     accumulated.clear()
-                    accumulated.append(clean_text + image_md)
+                    accumulated.append(image_md)
                     yield f"data: {json.dumps({'type': 'content', 'content': image_md})}\n\n"
                 except Exception as img_exc:  # noqa: BLE001
                     import logging

@@ -237,6 +237,25 @@ function parseBlocks(src: string): ReactNode[] {
       continue;
     }
 
+    // Standalone image line: ![alt](url)
+    const imgMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imgMatch) {
+      const imgSrc = safeUrl(imgMatch[2]);
+      if (imgSrc) {
+        out.push(
+          <img
+            key={key++}
+            src={imgSrc}
+            alt={imgMatch[1] || 'Generated image'}
+            style={{ maxWidth: '100%', borderRadius: '12px', margin: '8px 0', display: 'block' }}
+            loading="lazy"
+          />,
+        );
+      }
+      i += 1;
+      continue;
+    }
+
     if (line.trimStart().startsWith(">")) {
       const buf: string[] = [];
       while (i < lines.length && lines[i].trimStart().startsWith(">")) {

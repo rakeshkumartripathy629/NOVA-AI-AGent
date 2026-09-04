@@ -76,7 +76,7 @@ function safeUrl(url: string): string | undefined {
 function parseInline(src: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern =
-    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)\s]+)\))|(\bhttps?:\/\/[^\s<>"'`\[\]]+)|(\bwww\.[^\s<>"'`\[\]]+)/g;
+    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(!\[([^\]]*)\]\(([^)\s]+)\))|(\[([^\]]+)\]\(([^)\s]+)\))|(\bhttps?:\/\/[^\s<>"'`\[\]]+)|(\bwww\.[^\s<>"'`\[\]]+)/g;
   let last = 0;
   let i = 0;
   let m: RegExpExecArray | null;
@@ -97,17 +97,19 @@ function parseInline(src: string, keyPrefix: string): ReactNode[] {
         </code>,
       );
     } else if (m[8] !== undefined && m[9] !== undefined) {
-      const href = safeUrl(m[9]);
-      nodes.push(
-        <a
-          key={`${keyPrefix}-l${i}`}
-          href={href ?? m[9]}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {m[8]}
-        </a>,
-      );
+      // Image: ![alt](url)
+      const imgSrc = safeUrl(m[9]);
+      if (imgSrc) {
+        nodes.push(
+          <img
+            key={`${keyPrefix}-img${i}`}
+            src={imgSrc}
+            alt={m[8] || 'Generated image'}
+            style={{ maxWidth: '100%', borderRadius: '12px', margin: '8px 0', display: 'block' }}
+            loading="lazy"
+          />,
+        );
+      }
     } else if (m[10] !== undefined) {
       const href = safeUrl(m[10].replace(/[),.;]+$/, ""));
       if (href) {

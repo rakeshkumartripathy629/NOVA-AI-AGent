@@ -26,6 +26,35 @@ from app.models.user import User
 router = APIRouter()
 
 
+def _extract_image_action(text: str) -> dict | None:
+    """Extract image generation action from AI response."""
+    import re
+    # Look for JSON with action: generate_image
+    patterns = [
+        r'```json\s*(\{[^`]*?\"action\"\s*:\s*\"generate_image\"[^`]*?\})\s*```',
+        r'(\{\s*\"action\"\s*:\s*\"generate_image\"[^}]*\})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            try:
+                data = json.loads(match.group(1))
+                if data.get("action") == "generate_image" and data.get("prompt"):
+                    return data
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def _clean_image_json(text: str) -> str:
+    """Remove image generation JSON from text."""
+    import re
+    # Remove the JSON block from the response
+    text = re.sub(r'```json\s*\{[^`]*?\"action\"\s*:\s*\"generate_image\"[^`]*?\}\s*```', '', text, flags=re.DOTALL)
+    text = re.sub(r'\{\s*\"action\"\s*:\s*\"generate_image\"[^}]*\}', '', text)
+    return text.strip()
+
+
 class MessageCreate(BaseModel):
     """Message create model."""
     content: str
@@ -426,6 +455,32 @@ async def stream_message(
                 if event.get("type") == "citations":
                     citations = event.get("citations", [])
                 yield f"data: {json.dumps(event)}\n\n"
+
+            # Check if AI response contains an image generation action
+            full_text = "".join(accumulated)
+            image_action = _extract_image_action(full_text)
+            if image_action:
+                import logging
+                logging.getLogger(__name__).info("Image generation requested: %s", image_action.get("prompt", "")[:100])
+                yield f"data: {json.dumps({'type': 'content', 'content': '\n\n🎨 Generating image...\n'})}\n\n"
+                try:
+                    from app.ai.image_gen import generate_image_url
+                    image_url = await generate_image_url(
+                        image_action["prompt"],
+                        width=image_action.get("width", 1024),
+                        height=image_action.get("height", 1024),
+                    )
+                    # Replace accumulated content with clean response + image
+                    image_md = f"\n\n![Generated Image]({image_url})\n\n[View full image]({image_url})\n"
+                    clean_text = _clean_image_json(full_text)
+                    accumulated.clear()
+                    accumulated.append(clean_text + image_md)
+                    yield f"data: {json.dumps({'type': 'content', 'content': image_md})}\n\n"
+                except Exception as img_exc:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning("Image generation failed: %s", img_exc)
+                    yield f"data: {json.dumps({'type': 'content', 'content': f'\n⚠️ Image generation failed: {str(img_exc)}'})}\n\n"
+
         except Exception as exc:  # noqa: BLE001
             import logging
 

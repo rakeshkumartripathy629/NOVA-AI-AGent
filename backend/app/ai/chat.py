@@ -97,13 +97,19 @@ async def stream_chat_response(
     """Stream an AI chat response as a sequence of event dicts."""
     import time as _perf
     _t0 = _perf.monotonic()
-    history = await _load_history(
-        conversation.id,
-        exclude_ids=[assistant_message_id],
-    )
+
+    # Skip history for very short messages for speed
+    if len(user_message_content.strip()) < 10 and not agent_id:
+        history = []
+    else:
+        history = await _load_history(
+            conversation.id,
+            exclude_ids=[assistant_message_id],
+        )
     logger.info("[PERF] History load: %.2fs", _perf.monotonic() - _t0)
 
-    agent = await _resolve_agent(agent_id)
+    # Skip agent resolution if no agent_id
+    agent = await _resolve_agent(agent_id) if agent_id else None
     if agent:
         system_prompt = system_prompt or agent.system_prompt
         model = model or agent.model

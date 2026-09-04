@@ -438,7 +438,6 @@ async def stream_message(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User message not found")
         user_message.content = request.content
         user_message.is_edited = True
-        await db.flush()
     else:
         user_message = Message(
             conversation_id=conversation_id,
@@ -454,7 +453,6 @@ async def stream_message(
             metadata_={"agent_id": str(request.agent_id)} if request.agent_id else {},
         )
         db.add(user_message)
-        await db.flush()
 
     assistant_message = Message(
         conversation_id=conversation_id,
@@ -469,8 +467,7 @@ async def stream_message(
     conversation.last_message_at = datetime.utcnow()
     if not request.user_message_id:
         conversation.message_count += 1
-    await db.flush()
-    await db.commit()
+    await db.commit()  # Single commit for both messages
 
     from app.ai.chat import stream_chat_response
 

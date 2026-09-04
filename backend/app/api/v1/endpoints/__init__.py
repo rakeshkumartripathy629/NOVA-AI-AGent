@@ -27,6 +27,7 @@ from app.api.v1.endpoints import (
     code_execution,
     image_gen,
     personas,
+    training,
 )
 
 __all__ = [
@@ -55,4 +56,5 @@ __all__ = [
     "code_execution",
     "image_gen",
     "personas",
+    "training",
 ]

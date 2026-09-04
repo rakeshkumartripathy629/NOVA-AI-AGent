@@ -10,10 +10,11 @@ if TYPE_CHECKING:
     from app.models.memory import MemoryItem
 
 
-def build_base_system_prompt(user, user_message: str = "", persona=None) -> str:
+def build_base_system_prompt(user, user_message: str = "", persona=None, training_prompt_id: str = None) -> str:
     """Build the base system prompt personalized for the user.
     
     If a persona is provided, use its system_prompt as the base personality.
+    If a training_prompt_id is provided, use that training prompt.
     Otherwise, use the default Nova personality.
     """
     name = getattr(user, "username", None) or str(
@@ -21,8 +22,17 @@ def build_base_system_prompt(user, user_message: str = "", persona=None) -> str:
     ).split("@")[0]
     today = date.today().isoformat()
     
-    # Use persona's system prompt if provided, otherwise default Nova
-    if persona and hasattr(persona, 'system_prompt') and persona.system_prompt:
+    # Use training prompt if provided, then persona, then default Nova
+    if training_prompt_id:
+        from app.ai.training_prompts import get_training_prompt
+        tp = get_training_prompt(training_prompt_id)
+        if tp:
+            personality = tp.system_prompt
+        elif persona and hasattr(persona, 'system_prompt') and persona.system_prompt:
+            personality = persona.system_prompt
+        else:
+            personality = "You are Nova, a personal AI assistant."
+    elif persona and hasattr(persona, 'system_prompt') and persona.system_prompt:
         personality = persona.system_prompt
     else:
         personality = "You are Nova, a personal AI assistant."

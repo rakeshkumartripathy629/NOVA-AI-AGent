@@ -29,6 +29,7 @@ from app.api.v1.endpoints import (
     code_execution,
     image_gen,
     personas,
+    training,
 )
 
 api_router = APIRouter()
@@ -108,3 +109,6 @@ api_router.include_router(image_gen.router, prefix="/image", tags=["Image Genera
 
 # Personas
 api_router.include_router(personas.router, prefix="/personas", tags=["Personas"])
+
+# Training Prompts
+api_router.include_router(training.router, prefix="/training", tags=["Training Prompts"])

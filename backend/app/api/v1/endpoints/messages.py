@@ -434,6 +434,10 @@ async def stream_message(
         accumulated = []
         citations = []
         try:
+            # Buffer events — don't stream raw AI text yet (may contain image JSON)
+            buffered_events = []
+            is_image_action = False
+
             async for event in stream_chat_response(
                 conversation=conversation,
                 user_message_content=request.content,
@@ -454,15 +458,23 @@ async def stream_message(
                     accumulated.append(event.get("content", ""))
                 if event.get("type") == "citations":
                     citations = event.get("citations", [])
-                yield f"data: {json.dumps(event)}\n\n"
+                buffered_events.append(event)
 
-            # Check if AI response contains an image generation action
+                # Check for image action mid-stream (once we have enough text)
+                if not is_image_action and len(accumulated) > 2:
+                    full_check = "".join(accumulated)
+                    if _extract_image_action(full_check):
+                        is_image_action = True
+
+            # Now decide: image or normal text?
             full_text = "".join(accumulated)
             image_action = _extract_image_action(full_text)
+
             if image_action:
+                # IMAGE: don't show AI text, generate and show image only
                 import logging
-                logging.getLogger(__name__).info("Image generation requested: %s", image_action.get("prompt", "")[:100])
-                yield f"data: {json.dumps({'type': 'content', 'content': '🎨 '})}\n\n"
+                logging.getLogger(__name__).info("Image generation: %s", image_action.get("prompt", "")[:100])
+                yield f"data: {json.dumps({'type': 'content', 'content': '🎨 Generating image...'})}\n\n"
                 try:
                     from app.ai.image_gen import generate_image_url
                     image_url = await generate_image_url(
@@ -470,7 +482,6 @@ async def stream_message(
                         width=image_action.get("width", 1024),
                         height=image_action.get("height", 1024),
                     )
-                    # Only image — no link, no extra text
                     image_md = f"![]({image_url})"
                     accumulated.clear()
                     accumulated.append(image_md)
@@ -479,6 +490,10 @@ async def stream_message(
                     import logging
                     logging.getLogger(__name__).warning("Image generation failed: %s", img_exc)
                     yield f"data: {json.dumps({'type': 'content', 'content': f'\n⚠️ Image generation failed: {str(img_exc)}'})}\n\n"
+            else:
+                # NORMAL: stream all buffered events to user
+                for evt in buffered_events:
+                    yield f"data: {json.dumps(evt)}\n\n"
 
         except Exception as exc:  # noqa: BLE001
             import logging

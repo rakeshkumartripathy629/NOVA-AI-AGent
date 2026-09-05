@@ -19,6 +19,97 @@ VIDEO_QUERY_HINTS = (
     "reels", "shorts", "trailer", "review video",
 )
 
+WEATHER_QUERY_HINTS = (
+    "weather", "forecast", "temper", "temp ", "temperature", "मौसम", "तापमान",
+    "mausam", "moosam", "kitna garam", "kitna thanda", "kitni garmi", "raining",
+    "rain", "barish", "humidity", "wind", "aaj ka mausam", "आज का मौसम",
+)
+
+# Words never part of a city name — stripped when extracting the location.
+_WEATHER_STOPWORDS = {
+    "what", "is", "the", "current", "weather", "forecast", "temperature", "temp",
+    "today", "now", "in", "at", "of", "for", "like", "please", "give", "tell",
+    "me", "short", "answer", "kitna", "kitni", "hai", "ka", "ki", "ke", "mein",
+    "main", "aaj", "mausam", "moosam", "temperature", "degree", "celsius",
+    "मौसम", "तापमान", "आज", "का", "की", "के", "है", "में", "कितना", "कितनी",
+    "गर्म", "ठंड", "rain", "raining", "humidity", "wind", "weather", "outside",
+}
+
+
+async def _open_meteo_weather(query: str) -> Tuple[str, List[Dict[str, Any]]]:
+    """Live current weather via Open-Meteo (free, keyless, JSON API).
+
+    Extracts a best-effort location from the query, geocodes it, and returns
+    current conditions as grounding context. Returns ("", []) when no location
+    can be determined or the API is unreachable.
+    """
+    import re as _re
+
+    words = _re.findall(r"[\w\u0900-\u097F]+", query.lower())
+    location = " ".join(w for w in words if w not in _WEATHER_STOPWORDS and len(w) > 1)
+    if not location:
+        return "", []
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            geo = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": location, "count": 1, "language": "en", "format": "json"},
+            )
+            geo.raise_for_status()
+            geos = (geo.json() or {}).get("results") or []
+            if not geos:
+                return "", []
+            top = geos[0]
+            w = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": top["latitude"],
+                    "longitude": top["longitude"],
+                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+                    "timezone": "auto",
+                },
+            )
+            w.raise_for_status()
+            cur = (w.json() or {}).get("current") or {}
+            if not cur:
+                return "", []
+            name = top.get("name", location.title())
+            admin = top.get("admin1")
+            country = top.get("country")
+            place = name + (f", {admin}" if admin and admin != name else "") + (f", {country}" if country else "")
+            temp = cur.get("temperature_2m")
+            humidity = cur.get("relative_humidity_2m")
+            wind = cur.get("wind_speed_10m")
+            code = cur.get("weather_code")
+            context = (
+                f"[1] (Live weather) Current conditions in {place} "
+                f"({top.get('latitude')},{top.get('longitude')}): "
+                + (f"temperature {temp}°C, " if temp is not None else "")
+                + (f"humidity {humidity}%, " if humidity is not None else "")
+                + (f"wind {wind} km/h, " if wind is not None else "")
+                + (f"WMO weather code {code}" if code is not None else "")
+                + ". (Live data from Open-Meteo)"
+            )
+            citation = [{
+                "index": 1,
+                "type": "web",
+                "title": f"Open-Meteo live weather for {place}",
+                "url": f"https://open-meteo.com/en/docs#latitude={top.get('latitude')}&longitude={top.get('longitude')}",
+                "content": context,
+            }]
+            return context, citation
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Open-Meteo failed: %s", exc)
+        return "", []
+
+
+def _is_weather_query(query: str) -> bool:
+    q = (query or "").lower()
+    return any(hint in q for hint in WEATHER_QUERY_HINTS)
+
 
 def _direct_url(href: str) -> str:
     """DuckDuckGo HTML wraps links in a redirect (//duckduckgo.com/l/?uddg=...).
@@ -223,6 +314,14 @@ async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
 
     engine = settings.SEARCH_ENGINE.lower()
     max_results = settings.SEARCH_MAX_RESULTS
+
+    # Weather questions are answered deterministically from Open-Meteo's live
+    # JSON API — no scraping, no API key, and it works from datacenter IPs
+    # where search engines often block requests.
+    if _is_weather_query(query):
+        context, citations = await _open_meteo_weather(query)
+        if context:
+            return context, citations
 
     try:
         if engine == "duckduckgo":

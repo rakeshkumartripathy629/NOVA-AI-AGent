@@ -38,6 +38,44 @@ def _direct_url(href: str) -> str:
     return href
 
 
+async def _search_duckduckgo_lite(query: str, max_results: int) -> List[Dict[str, str]]:
+    """Search via the DuckDuckGo Lite endpoint.
+
+    Lite is far more tolerant of datacenter IPs than html.duckduckgo.com
+    (which Render/cloud IPs often get blocked on).
+    """
+    import httpx
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        resp = await client.get(
+            "https://lite.duckduckgo.com/lite/",
+            params={"q": query},
+            headers={"User-Agent": "Mozilla/5.0 NovaAI/1.0"},
+        )
+        resp.raise_for_status()
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+    for link in soup.select("a.result-link")[:max_results]:
+        row = link.find_parent("tr")
+        snippet_el = None
+        if row:
+            # The snippet lives in the next table row's .result-snippet cell.
+            next_row = row.find_next_sibling("tr")
+            if next_row:
+                snippet_el = next_row.select_one(".result-snippet")
+        results.append(
+            {
+                "title": link.get_text(" ", strip=True),
+                "url": _direct_url(link.get("href", "")),
+                "snippet": snippet_el.get_text(" ", strip=True) if snippet_el else "",
+            }
+        )
+    return results
+
+
 async def _search_duckduckgo(query: str, max_results: int) -> List[Dict[str, str]]:
     import httpx
 
@@ -188,10 +226,13 @@ async def web_search_augment(query: str) -> Tuple[str, List[Dict[str, Any]]]:
 
     try:
         if engine == "duckduckgo":
-            # Run web and video search in parallel for speed
-            web_task = asyncio.create_task(_search_duckduckgo(query, max_results))
+            # Prefer Lite (more tolerant of cloud IPs); fall back to the HTML
+            # endpoint, and fetch video results in parallel for speed.
             video_task = asyncio.create_task(_search_duckduckgo_youtube(query, 2))
-            results, video_results = await asyncio.gather(web_task, video_task)
+            results = await _search_duckduckgo_lite(query, max_results)
+            if not results:
+                results = await _search_duckduckgo(query, max_results)
+            video_results = await video_task
         else:  # serpapi, google, bing
             results = await _search_serpapi(query, max_results)
             video_results = []

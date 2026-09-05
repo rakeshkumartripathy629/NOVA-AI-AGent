@@ -178,7 +178,7 @@ async def stream_chat_response(
                 from app.ai.websearch import web_search_augment
                 return await asyncio.wait_for(
                     web_search_augment(user_message_content),
-                    timeout=3.0,
+                    timeout=4.5,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 pass

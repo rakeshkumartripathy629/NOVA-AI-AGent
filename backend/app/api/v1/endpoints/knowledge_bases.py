@@ -425,9 +425,9 @@ async def create_document(
     await db.commit()
     await db.refresh(document)
 
-    from app.services.indexing import queue_document_processing
+    from app.services.indexing import schedule_document_processing
 
-    await queue_document_processing(document.id, organization.id)
+    schedule_document_processing(document.id, organization.id)
 
     return DocumentResponse.model_validate(document)
 
@@ -497,9 +497,9 @@ async def update_document(
     await db.commit()
     await db.refresh(document)
 
-    from app.services.indexing import queue_document_processing
+    from app.services.indexing import schedule_document_processing
 
-    await queue_document_processing(document.id, organization.id)
+    schedule_document_processing(document.id, organization.id)
 
     return DocumentResponse.model_validate(document)
 

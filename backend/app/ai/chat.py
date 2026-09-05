@@ -23,6 +23,22 @@ logger = get_logger("ai.chat")
 
 MAX_HISTORY_MESSAGES = 10
 
+# When the user's question clearly needs current information we search the web
+# automatically; for ordinary chat we skip it entirely so replies stay fast.
+_LIVE_QUERY_HINTS = (
+    "weather", "temper", "temp ", " forecast", "mausam", "maosam", "मौसम", "तापमान", "आज",
+    " today", "now", "current", "latest", "live", "news", "breaking", "update",
+    "price", "rate", "stock", "market", "match", "score", "election", "result",
+    "schedule", "time in", "kitne baje", "date", "birthday", "holiday",
+    "who won", "who is the", "president", "pm ", "minister", "covid", "earthquake",
+)
+
+
+def _needs_live_data(query: str) -> bool:
+    """Best-effort hint: does this question need live web results?"""
+    q = (query or "").lower()
+    return any(hint in q for hint in _LIVE_QUERY_HINTS)
+
 
 async def _load_history(conversation_id: UUID, exclude_ids: List[UUID]) -> List[Dict[str, str]]:
     """Load recent message history for context, oldest first."""
@@ -154,12 +170,15 @@ async def stream_chat_response(
         return []
 
     async def _do_web():
-        if use_web_search:
+        # Only search when the question actually needs current data (and the
+        # user hasn't turned live search off). Ordinary chat skips it so the
+        # reply starts fast; live questions get a proper search budget.
+        if use_web_search and _needs_live_data(user_message_content):
             try:
                 from app.ai.websearch import web_search_augment
                 return await asyncio.wait_for(
                     web_search_augment(user_message_content),
-                    timeout=1.0,
+                    timeout=3.0,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 pass

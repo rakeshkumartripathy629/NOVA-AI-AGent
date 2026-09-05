@@ -90,16 +90,36 @@ async def queue_file_processing(file_id, organization_id) -> bool:
 def schedule_file_processing(file_id, organization_id) -> None:
     """Start file processing in the background and return immediately.
 
-    PDF parsing + embedding can take many seconds when no Celery worker is
-    running; never block the upload request on it or the file never shows up
-    in chat quickly.
+    Never block the upload request on PDF parsing + embedding. Also do NOT go
+    through Celery here: this container has no worker/broker, and importing
+    the Celery task module synchronously on the event loop stalls uvicorn long
+    enough that the upload response times out (502). A short initial delay
+    guarantees the upload response is flushed before any heavy work starts.
     """
 
     async def _run() -> None:
+        await asyncio.sleep(1.0)
         try:
-            await queue_file_processing(file_id, organization_id)
+            from app.services.files import process_file as process_file_service
+
+            await process_file_service(str(file_id), str(organization_id))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Background file processing failed for %s: %s", file_id, exc)
+
+    task = asyncio.create_task(_run())
+    _FILES_TASKS.add(task)
+    task.add_done_callback(_FILES_TASKS.discard)
+
+
+def schedule_document_processing(document_id, organization_id) -> None:
+    """Index a knowledge-base document in the background (no Celery)."""
+
+    async def _run() -> None:
+        await asyncio.sleep(1.0)
+        try:
+            await index_document_record(document_id, organization_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Background document indexing failed for %s: %s", document_id, exc)
 
     task = asyncio.create_task(_run())
     _FILES_TASKS.add(task)

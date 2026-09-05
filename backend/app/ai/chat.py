@@ -136,7 +136,7 @@ async def stream_chat_response(
                 from app.ai.memory import recall_context
                 return await asyncio.wait_for(
                     recall_context(user.id, user_message_content),
-                    timeout=1.0,
+                    timeout=0.5,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 return ""
@@ -147,7 +147,7 @@ async def stream_chat_response(
             try:
                 return await asyncio.wait_for(
                     _retrieve_context(conversation.id, knowledge_base_ids, user_message_content),
-                    timeout=1.0,
+                    timeout=0.5,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 return []
@@ -159,7 +159,7 @@ async def stream_chat_response(
                 from app.ai.websearch import web_search_augment
                 return await asyncio.wait_for(
                     web_search_augment(user_message_content),
-                    timeout=2.0,
+                    timeout=1.0,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 pass
@@ -214,7 +214,7 @@ async def stream_chat_response(
     # Skip primary if it's in cooldown — try next available instantly
     if not is_provider_healthy(primary_provider.name):
         from app.core.config import settings as _s
-        for name in ("groq", "cerebras", "gemini"):
+        for name in ("groq", "cerebras"):
             key = f"{name.upper()}_API_KEY"
             if getattr(_s, key, None) and is_provider_healthy(name):
                 primary_provider = get_provider(name)
@@ -224,7 +224,7 @@ async def stream_chat_response(
     def _fallback_providers():
         from app.core.config import settings as _s
         fallbacks = []
-        for name in ("groq", "gemini", "cerebras"):
+        for name in ("groq", "cerebras"):
             if name == primary_provider.name:
                 continue
             key = f"{name.upper()}_API_KEY"

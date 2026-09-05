@@ -99,6 +99,36 @@ def _clean_image_json(text: str) -> str:
     return text.strip()
 
 
+# Hard cap — never hold text back beyond this, whatever the reply looks like.
+# Plain text is normally released after the very first chunk that cannot be an
+# image JSON action, so the cap only guards pathological replies.
+_IMAGE_BUFFER_LIMIT = 4000
+
+
+def _stream_may_be_image(text: str) -> bool:
+    """True if the buffered reply could still become the image JSON action."""
+    t = text.lstrip()
+    if not t:
+        return True  # undecided yet
+    if t.startswith("```"):
+        # Only a json fence can carry the image action; code fences are text.
+        head = t[3:].lstrip()
+        first_line = head.splitlines()[0].strip().lower() if head else ""
+        return first_line.startswith("json")
+    return t.startswith("{")
+
+
+def _stream_is_image_response(text: str) -> bool:
+    """True when the buffered reply has clearly shown the image JSON action.
+
+    Requires the reply to start like JSON (or a ```json fence) AND contain the
+    generate_image marker, so prose or real code can never be misclassified.
+    """
+    if not _stream_may_be_image(text):
+        return False
+    return '"action"' in text and '"generate_image"' in text
+
+
 class MessageCreate(BaseModel):
     """Message create model."""
     content: str
@@ -474,12 +504,9 @@ async def stream_message(
     async def generate():
         accumulated = []
         citations = []
+        image_mode = False
+        pending = ""
         try:
-            # Buffer events — don't stream raw AI text yet (may contain image JSON)
-            buffered_events = []
-            is_image_action = False
-            image_check_text = ""
-
             async for event in stream_chat_response(
                 conversation=conversation,
                 user_message_content=request.content,
@@ -497,25 +524,47 @@ async def stream_message(
                 file_ids=request.files,
             ):
                 if event.get("type") == "content":
-                    accumulated.append(event.get("content", ""))
-                    image_check_text += event.get("content", "")
-                if event.get("type") == "citations":
+                    chunk = event.get("content", "")
+                    accumulated.append(chunk)
+                    if image_mode:
+                        # Image action already detected — never surface raw JSON
+                        continue
+                    # Small look-ahead: hold back the start of the reply until we
+                    # know it is not an image JSON block, so the raw JSON never
+                    # leaks into the chat. Plain text is released almost instantly.
+                    pending += chunk
+                    if _stream_is_image_response(pending):
+                        # AI replied with the image JSON action — drop it and emit
+                        # a single 'image' event at the end of the stream instead.
+                        image_mode = True
+                        pending = ""
+                    elif not _stream_may_be_image(pending) or len(pending) >= _IMAGE_BUFFER_LIMIT:
+                        # Clearly a normal text reply — release the buffer and
+                        # keep streaming the rest live.
+                        yield f"data: {json.dumps({'type': 'content', 'content': pending})}\n\n"
+                        pending = ""
+                elif event.get("type") == "citations" and not image_mode:
                     citations = event.get("citations", [])
-
-                # Quick image detection (check every 50 chars)
-                if not is_image_action and len(image_check_text) > 50:
-                    if _extract_image_action(image_check_text):
-                        is_image_action = True
-                    else:
-                        image_check_text = image_check_text[-100:]  # keep tail
-
-                # STREAM directly — no buffering for speed!
-                if not is_image_action:
                     yield f"data: {json.dumps(event)}\n\n"
+
+            # Release anything still held in the look-ahead buffer (e.g. a reply
+            # that started with '{' or a json fence but was NOT an image action).
+            if pending and not image_mode:
+                yield f"data: {json.dumps({'type': 'content', 'content': pending})}\n\n"
+            pending = ""
 
             # After streaming: check if it was an image action
             full_text = "".join(accumulated)
             image_action = _extract_image_action(full_text)
+
+            if image_mode and not image_action:
+                # The model clearly started an image JSON block but it did not
+                # parse completely — salvage the prompt so we still show an
+                # image instead of leaving raw JSON on screen.
+                import re as _re
+                m = _re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"', full_text)
+                if m:
+                    image_action = {"action": "generate_image", "prompt": m.group(1)}
 
             if image_action:
                 # IMAGE: replace text with generated image
@@ -534,6 +583,14 @@ async def stream_message(
                 except Exception as img_exc:  # noqa: BLE001
                     import logging
                     logging.getLogger(__name__).warning("Image gen failed: %s", img_exc)
+                    # Never leave the user staring at raw JSON or an empty bubble.
+                    fallback = _clean_image_json(full_text) or (
+                        f"⚠ Image generation failed ({img_exc}). Please try again."
+                    )
+                    accumulated.clear()
+                    accumulated.append(fallback)
+                    if fallback:
+                        yield f"data: {json.dumps({'type': 'content', 'content': fallback})}\n\n"
 
         except Exception as exc:  # noqa: BLE001
             import logging

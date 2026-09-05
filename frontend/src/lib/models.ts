@@ -20,12 +20,11 @@ export const PROVIDERS: ProviderOption[] = [
   },
   {
     id: 'groq',
-    label: '⚡ Groq (Free)',
+    label: '⚡ Groq (Free, fastest)',
     models: [
       { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B' },
       { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
-      { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
+      { id: 'groq/compound-mini', name: 'Compound Mini (GPT-OSS 120B)' },
     ],
   },
   {
@@ -66,8 +65,9 @@ export const PROVIDERS: ProviderOption[] = [
   },
 ];
 
-export const DEFAULT_PROVIDER = 'gemini';
-export const DEFAULT_MODEL = 'gemini-3.6-flash';
+// Production default: Groq (fastest time-to-first-byte, free tier).
+export const DEFAULT_PROVIDER = 'groq';
+export const DEFAULT_MODEL = 'qwen/qwen3.6-27b';
 
 export function modelName(providerId: string, modelId: string): string {
   const provider = PROVIDERS.find((p) => p.id === providerId);

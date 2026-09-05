@@ -33,10 +33,13 @@ async def transcribe(
 
     provider = get_provider(settings.STT_PROVIDER)
     try:
+        # Pass the client model through as-is (None = provider default). Never
+        # inject settings.STT_MODEL here: it is 'whisper-1' (OpenAI), which
+        # Groq rejects — Groq only serves whisper-large-v3.
         text = await provider.transcribe(
             audio_bytes,
             language=language,
-            model=model or settings.STT_MODEL,
+            model=model,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))

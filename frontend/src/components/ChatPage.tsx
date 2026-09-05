@@ -148,7 +148,7 @@ export default function ChatPage() {
   const [knowledgeBases, setKnowledgeBases] = useState<api.KnowledgeBase[]>([]);
   const [selectedKb, setSelectedKb] = useState<string>("");
   const [kbMenuOpen, setKbMenuOpen] = useState(false);
-  const [webSearch, setWebSearch] = useState(false);
+  const [webSearch, setWebSearch] = useState(true); // live answers by default; globe button toggles
   const [uploading, setUploading] = useState(false); // eslint-disable-line
   const [editId, setEditId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -838,32 +838,52 @@ export default function ChatPage() {
         }
       }
       const record = await api.uploadFile(kbId, file);
+      const att: ChatMessage["attachment"] = {
+        id: record.id,
+        name: record.original_filename,
+        mime_type: record.mime_type,
+        status: record.status ?? "processing",
+      };
+      const msgId = `local-${Date.now()}`;
+      // Show the file in chat immediately — indexing continues in the background.
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: msgId,
+          role: "assistant",
+          content: `PDF "${record.original_filename}" added. Indexing is running in the background — you can ask questions about it once it's ready.`,
+          attachment: att,
+        },
+      ]);
+      showToast("PDF added");
+      // Poll the backend in the background and update the chip + bubble status.
       let status = record.status ?? "";
-      for (let i = 0; i < 20 && status !== "ready"; i++) {
+      for (let i = 0; i < 30 && status !== "ready" && status !== "failed"; i++) {
         await new Promise((r) => setTimeout(r, 1000));
         try {
           const fresh = await api.getFile(record.id);
           status = fresh.status ?? status;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId
+                ? {
+                    ...m,
+                    content:
+                      status === "ready"
+                        ? `PDF "${record.original_filename}" is indexed and ready. What would you like to extract from it?`
+                        : status === "failed"
+                          ? `⚠ PDF "${record.original_filename}" failed to index. Please try again.`
+                          : m.content,
+                    attachment: m.attachment ? { ...m.attachment, status } : m.attachment,
+                  }
+                : m,
+            ),
+          );
         } catch {
           break;
         }
       }
-      const att = {
-        id: record.id,
-        name: record.original_filename,
-        mime_type: record.mime_type,
-        status,
-      };
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `local-${Date.now()}`,
-          role: "assistant",
-          content: `PDF "${record.original_filename}" uploaded and indexed. What details would you like me to extract from it?`,
-          attachment: att,
-        },
-      ]);
-      showToast("PDF uploaded");
+      if (status === "ready") showToast("PDF indexed & ready — ask away!");
     } catch (err) {
       showToast("⚠ " + (err instanceof Error ? err.message : "Upload failed"));
     } finally {

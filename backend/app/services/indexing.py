@@ -4,6 +4,7 @@ the Celery worker / broker is unavailable.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -12,6 +13,9 @@ from sqlalchemy import select
 from app.db.session import get_session_factory
 
 logger = logging.getLogger(__name__)
+
+# Tracks in-flight background file jobs so the event loop keeps them alive.
+_FILES_TASKS: set = set()
 
 
 async def index_document_record(document_id, organization_id) -> int:
@@ -81,3 +85,22 @@ async def queue_file_processing(file_id, organization_id) -> bool:
 
         await process_file_service(str(file_id), str(organization_id))
         return False
+
+
+def schedule_file_processing(file_id, organization_id) -> None:
+    """Start file processing in the background and return immediately.
+
+    PDF parsing + embedding can take many seconds when no Celery worker is
+    running; never block the upload request on it or the file never shows up
+    in chat quickly.
+    """
+
+    async def _run() -> None:
+        try:
+            await queue_file_processing(file_id, organization_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Background file processing failed for %s: %s", file_id, exc)
+
+    task = asyncio.create_task(_run())
+    _FILES_TASKS.add(task)
+    task.add_done_callback(_FILES_TASKS.discard)

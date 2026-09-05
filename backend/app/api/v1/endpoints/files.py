@@ -376,9 +376,12 @@ async def upload_file(
     await db.commit()
 
     if knowledge_base_id:
-        from app.services.indexing import queue_file_processing
+        # Index in the background so the upload request returns immediately
+        # (PDF parsing + embedding can take many seconds).
+        from app.services.indexing import schedule_file_processing
 
-        await queue_file_processing(file_record.id, organization.id)
+        await db.commit()
+        schedule_file_processing(file_record.id, organization.id)
         await db.refresh(file_record)
     else:
         file_record.status = FileStatus.READY
@@ -408,9 +411,10 @@ async def complete_upload(
     await db.commit()
 
     if file_record.knowledge_base_id:
-        from app.services.indexing import queue_file_processing
+        from app.services.indexing import schedule_file_processing
 
-        await queue_file_processing(file_record.id, file_record.organization_id)
+        await db.commit()
+        schedule_file_processing(file_record.id, file_record.organization_id)
         await db.refresh(file_record)
     else:
         file_record.status = FileStatus.READY

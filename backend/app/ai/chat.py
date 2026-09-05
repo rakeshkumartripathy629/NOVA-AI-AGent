@@ -147,7 +147,7 @@ async def stream_chat_response(
             try:
                 return await asyncio.wait_for(
                     _retrieve_context(conversation.id, knowledge_base_ids, user_message_content),
-                    timeout=0.5,
+                    timeout=1.5,
                 )
             except (asyncio.TimeoutError, Exception):  # noqa: BLE001
                 return []

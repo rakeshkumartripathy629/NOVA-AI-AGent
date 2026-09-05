@@ -33,6 +33,8 @@ services:
         sync: false
       - key: CEREBRAS_API_KEY
         sync: false
+      - key: SEARCH_ENGINE
+        value: duckduckgo
       - key: GROQ_MODEL
         value: "groq/compound-mini"
       - key: MEMORY_EMBEDDING_PROVIDER

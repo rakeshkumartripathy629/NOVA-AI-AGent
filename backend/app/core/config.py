@@ -147,7 +147,8 @@ class Settings(BaseSettings):
     
     # Web Search
     SEARCH_API_KEY: Optional[str] = None
-    SEARCH_ENGINE: str = "serpapi"  # serpapi, google, bing, duckduckgo
+    # duckduckgo works with NO API key (used by default); serpapi/google need SEARCH_API_KEY.
+    SEARCH_ENGINE: str = "duckduckgo"  # duckduckgo, serpapi, google, bing
     SEARCH_MAX_RESULTS: int = 10
     
     # Email
